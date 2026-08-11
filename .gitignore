@@ -4,14 +4,8 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Local calculation output
-results/
-calculations/
-density_matrices/
-scratch/
+# pytest
+.pytest_cache/
 
 # macOS Finder metadata
 .DS_Store
-
-# pytest
-.pytest_cache/

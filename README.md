@@ -18,12 +18,12 @@ Both branches have dense and matrix-free (Davidson) routes, density
 fitting, Epstein-Nesbet denominator dressing, and static self-energy
 corrections.
 
-**Density matrices** — MP2 through MP5 correlated 1-RDMs, restricted and
+**Density matrices** — MP2, MP3 and MP4 correlated 1-RDMs, restricted and
 unrestricted, dense and DF, with Laplace-fused amplitude routes. GW and
-CCSD/CCSDT density matrices too. Generated with pdaggerq
+CCSD/CCSDT density matrices too. Generated with pdaggerq.
 
 **Coupled cluster** — CCSD and CCSDT amplitudes and lambda equations,
-restricted and spin-orbital, plus EOM-CC (IP/EA/EE). Generated with pdaggerq
+restricted and spin-orbital, plus EOM-CC (IP/EA/EE). Generated with pdaggerq.
 
 **Screening** — static RPA screened Coulomb interaction W, and the screened
 C^(1) block of the screened multichannel Dyson equation.
