@@ -1,0 +1,35 @@
+MBPTcode
+Copyright (c) 2026 Arno Förster, Vrije Universiteit Amsterdam
+
+This product is licensed under the MIT License (see LICENSE).
+
+It includes third-party components distributed under the Apache License,
+Version 2.0. You may obtain a copy of that license at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------
+pdaggerq
+Copyright (C) 2020 A. Eugene DePrince III
+https://github.com/edeprince3/pdaggerq
+Licensed under the Apache License, Version 2.0.
+
+  * src/SingleReference/CC/diis.py
+    Unmodified copy of the DIIS implementation from the pdaggerq package.
+    The original Apache-2.0 header is retained at the top of the file.
+
+  * src/SingleReference/CC/amplitudes.py
+    Adapted from pdaggerq's full_cc_codes/ccsdt.py example. Modifications
+    are limited to contraction bookkeeping (a memoizing einsum wrapper and
+    explicit contraction ordering) and are described in the file's module
+    docstring; the amplitude equations themselves are unchanged.
+
+--------------------------------------------------------------------------
+GreenX
+https://github.com/nomad-coe/greenX
+Licensed under the Apache License, Version 2.0.
+
+  * src/Base/utils/minimax_omega_data.json
+  * src/Base/utils/minimax_tau_data.json
+    Minimax quadrature grid tables derived from the GreenX library, loaded
+    by src/Base/utils/grids.py.

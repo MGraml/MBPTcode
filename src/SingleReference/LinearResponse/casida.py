@@ -1,0 +1,134 @@
+import numpy as np
+import scipy.linalg as la
+from src.Base.utils.linearAlgebra.diagonalization import diagonalize_matrix, gather_block_cyclic, scatter_block_cyclic
+from src.Base.constants import CASIDA_NUMERICAL_EPS
+
+class CasidaResult(tuple):
+    """3-tuple (omega, X, Y) that also carries an is_distributed flag for MPI post-processing."""
+    def __new__(cls, omega, X, Y, is_distributed=False):
+        return super().__new__(cls, (omega, X, Y))
+    def __init__(self, omega, X, Y, is_distributed=False):
+        self.is_distributed = is_distributed
+
+class CasidaSolver:
+    """Solves [[A,B],[B,A]] [X,Y] = omega [X,-Y] via local scipy.linalg, or parallel ELPA/MPI for larger systems.
+
+    Handles both the real-symmetric case (molecular RPA/TDDFT/BSE, q=0) and the
+    complex-Hermitian case (Sander/Maggio/Kresse full BSE at finite momentum
+    transfer q, PRB 92, 045209). The algebra is identical; only the transpose
+    convention differs (Hermitian adjoint vs. transpose), and all conventions
+    below are Hermitian, which reduces to the real case for real inputs.
+    """
+    def __init__(self, A, B, eta=CASIDA_NUMERICAL_EPS):
+        self.A = np.asarray(A)
+        self.B = np.asarray(B)
+        self.eta = eta
+        self.ndim = self.A.shape[0]
+        self.is_complex = np.iscomplexobj(self.A) or np.iscomplexobj(self.B)
+        self.is_distributed = False
+        self.Z = None
+
+    def solve(self, threshold=5000, tda=False):
+        """Cholesky factorization where possible; switches to parallel ELPA above `threshold` dim when MPI is available.
+
+        tda=True ignores B (Tamm-Dancoff): plain Hermitian diagonalization of A,
+        omega = eig(A), X = eigenvectors (X^T X = 1 normalization), Y = 0.
+        """
+        if tda:
+            omega, Z_res, is_distributed, solver, comm = diagonalize_matrix(self.A, threshold=threshold)
+            X = Z_res
+            Y = np.zeros_like(Z_res)
+            if is_distributed:
+                solver.destroy()
+            self.Z = Z_res
+            self.is_distributed = is_distributed
+            return CasidaResult(omega, X, Y, is_distributed)
+
+        ApB = self.A + self.B
+        AmB = self.A - self.B
+
+        # Check if A-B is diagonal: only check off-diagonal norm
+        offdiag_norm = np.linalg.norm(AmB - np.diag(np.diag(AmB)))
+        is_AmB_diag = offdiag_norm < self.eta * self.ndim
+
+        global_N = self.ndim
+
+        if is_AmB_diag:
+            # A-B is Hermitian, so its diagonal is real (orbital energy differences).
+            diag_AmB = np.diag(AmB).real
+            diag_AmB = np.clip(diag_AmB, self.eta, None)
+            sqrt_AmB_diag = np.sqrt(diag_AmB)
+            inv_sqrt_AmB_diag = 1.0 / sqrt_AmB_diag
+
+            # Target matrix: (A-B)^{1/2} (A+B) (A-B)^{1/2}
+            M = ApB * sqrt_AmB_diag[:, None] * sqrt_AmB_diag[None, :]
+
+            # Perform diagonalization via backend
+            omega2, Z_res, is_distributed, solver, comm = diagonalize_matrix(M, threshold=threshold)
+
+            omega2 = np.clip(omega2, self.eta**2, None)
+            omega = np.sqrt(omega2)
+
+            if is_distributed:
+                # Gather, back-transform globally, and scatter back
+                Z_full = gather_block_cyclic(Z_res, global_N, solver, comm)
+                if comm.Get_rank() == 0:
+                    X_plus_Y_full = (Z_full * sqrt_AmB_diag[:, None]) / np.sqrt(omega)[None, :]
+                    X_minus_Y_full = (Z_full * inv_sqrt_AmB_diag[:, None]) * np.sqrt(omega)[None, :]
+                    X_full = 0.5 * (X_plus_Y_full + X_minus_Y_full)
+                    Y_full = 0.5 * (X_plus_Y_full - X_minus_Y_full)
+                else:
+                    X_full = None
+                    Y_full = None
+                X = scatter_block_cyclic(X_full, solver, comm)
+                Y = scatter_block_cyclic(Y_full, solver, comm)
+                solver.destroy()
+                self.Z = Z_res
+            else:
+                X_plus_Y = (Z_res * sqrt_AmB_diag[:, None]) / np.sqrt(omega)[None, :]
+                X_minus_Y = (Z_res * inv_sqrt_AmB_diag[:, None]) * np.sqrt(omega)[None, :]
+                X = 0.5 * (X_plus_Y + X_minus_Y)
+                Y = 0.5 * (X_plus_Y - X_minus_Y)
+                self.Z = Z_res
+        else:
+            try:
+                L = la.cholesky(ApB, lower=True)
+            except la.LinAlgError:
+                eigvals = la.eigvalsh(ApB)
+                shift = max(0, -eigvals[0] + self.eta)
+                L = la.cholesky(ApB + shift * np.eye(self.ndim), lower=True)
+
+            M = L.conj().T @ (AmB @ L)
+
+            # Perform diagonalization via backend
+            omega2, Z_res, is_distributed, solver, comm = diagonalize_matrix(M, threshold=threshold)
+
+            omega2 = np.clip(omega2, self.eta**2, None)
+            omega = np.sqrt(omega2)
+
+            if is_distributed:
+                # Gather, back-transform globally, and scatter back
+                Z_full = gather_block_cyclic(Z_res, global_N, solver, comm)
+                if comm.Get_rank() == 0:
+                    sqrt_omega = np.sqrt(omega)
+                    X_plus_Y_full = la.solve_triangular(L, Z_full, lower=True, trans='C') * sqrt_omega[None, :]
+                    X_minus_Y_full = (L @ Z_full) / sqrt_omega[None, :]
+                    X_full = 0.5 * (X_plus_Y_full + X_minus_Y_full)
+                    Y_full = 0.5 * (X_plus_Y_full - X_minus_Y_full)
+                else:
+                    X_full = None
+                    Y_full = None
+                X = scatter_block_cyclic(X_full, solver, comm)
+                Y = scatter_block_cyclic(Y_full, solver, comm)
+                solver.destroy()
+                self.Z = Z_res
+            else:
+                sqrt_omega = np.sqrt(omega)
+                X_plus_Y = la.solve_triangular(L, Z_res, lower=True, trans='C') * sqrt_omega[None, :]
+                X_minus_Y = (L @ Z_res) / sqrt_omega[None, :]
+                X = 0.5 * (X_plus_Y + X_minus_Y)
+                Y = 0.5 * (X_plus_Y - X_minus_Y)
+                self.Z = Z_res
+
+        self.is_distributed = is_distributed
+        return CasidaResult(omega, X, Y, is_distributed)

@@ -1,0 +1,422 @@
+# GENERATED CODE -- DF/RI variant of t2_1/t1_2/t2_2/t3_2/t1_3 numerators
+# takes B_aa/B_bb (3-index RI factors) instead of g_aaaa/g_abab/g_bbbb,
+# never forming a norb^4-scale integral block. Every OTHER density piece
+# (overlap2/3, m2_*/m3_* cross-terms) has no bracket integral factor at all and
+# is reused UNCHANGED from mpn_density_pieces_restricted.py.
+# Do not edit by hand.
+import numpy as np
+from src.SingleReference.CC.cached_einsum import einsum
+
+
+def t2_1_aaaa_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no):
+    result = np.zeros((nv, nv, no, no))
+    _tmp0 = einsum('Qai,Qbj->abij', B_aa[:, v, o], B_aa[:, v, o], optimize=True)
+    result += 1 * _tmp0
+    del _tmp0
+    _tmp1 = einsum('Qaj,Qbi->abij', B_aa[:, v, o], B_aa[:, v, o], optimize=True)
+    result -= 1 * _tmp1
+    del _tmp1
+    return result
+
+
+def t2_1_abab_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no):
+    result = np.zeros((nv, nv, no, no))
+    _tmp0 = einsum('Qai,Qbj->abij', B_aa[:, v, o], B_bb[:, v, o], optimize=True)
+    result += 1 * _tmp0
+    del _tmp0
+    return result
+
+
+def t1_2_aa_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no, t2_1_aaaa, t2_1_abab):
+    t2_aaaa = t2_1_aaaa
+    t2_abab = t2_1_abab
+    t2_bbbb = t2_1_aaaa
+    result = np.zeros((nv, no))
+    _tmp0 = einsum('Qkb,Qji,bakj->ai', B_aa[:, o, v], B_aa[:, o, o], t2_aaaa, optimize=True)
+    result -= 0.5 * _tmp0
+    del _tmp0
+    _tmp1 = einsum('Qki,Qjb,bakj->ai', B_aa[:, o, o], B_aa[:, o, v], t2_aaaa, optimize=True)
+    result += 0.5 * _tmp1
+    del _tmp1
+    _tmp2 = einsum('Qki,Qjb,abkj->ai', B_aa[:, o, o], B_bb[:, o, v], t2_abab, optimize=True)
+    result -= 0.5 * _tmp2
+    result -= 0.5 * _tmp2
+    _tmp3 = einsum('Qjb,bcij->Qci', B_aa[:, o, v], t2_aaaa)
+    result -= 0.5 * einsum('Qac,Qci->ai', B_aa[:, v, v], _tmp3)
+    del _tmp3
+    _tmp4 = einsum('Qjc,bcij->Qbi', B_aa[:, o, v], t2_aaaa)
+    result += 0.5 * einsum('Qab,Qbi->ai', B_aa[:, v, v], _tmp4)
+    del _tmp4
+    _tmp5 = einsum('Qjc,bcij->Qbi', B_bb[:, o, v], t2_abab)
+    result += 1.0 * einsum('Qab,Qbi->ai', B_aa[:, v, v], _tmp5)
+    del _tmp5
+    return result
+
+
+def t2_2_aaaa_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no, t2_1_aaaa, t2_1_abab):
+    t2_aaaa = t2_1_aaaa
+    t2_abab = t2_1_abab
+    t2_bbbb = t2_1_aaaa
+    result = np.zeros((nv, nv, no, no))
+    _tmp0 = einsum('Qli,Qkj,ablk->abij', B_aa[:, o, o], B_aa[:, o, o], t2_aaaa, optimize=True)
+    result += 0.5 * _tmp0
+    del _tmp0
+    _tmp1 = einsum('Qlj,Qki,ablk->abij', B_aa[:, o, o], B_aa[:, o, o], t2_aaaa, optimize=True)
+    result -= 0.5 * _tmp1
+    del _tmp1
+    _tmp2 = einsum('Qkc,Qaj,cbik->abij', B_aa[:, o, v], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result += 1 * _tmp2
+    result -= 1 * _tmp2.transpose(1, 0, 2, 3)
+    result -= 1 * _tmp2.transpose(0, 1, 3, 2)
+    result += 1 * _tmp2.transpose(1, 0, 3, 2)
+    del _tmp2
+    _tmp3 = einsum('Qkj,Qac,cbik->abij', B_aa[:, o, o], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result -= 1 * _tmp3
+    result += 1 * _tmp3.transpose(1, 0, 2, 3)
+    result += 1 * _tmp3.transpose(0, 1, 3, 2)
+    result -= 1 * _tmp3.transpose(1, 0, 3, 2)
+    del _tmp3
+    _tmp4 = einsum('Qaj,Qkc,bcik->abij', B_aa[:, v, o], B_bb[:, o, v], t2_abab, optimize=True)
+    result -= 1 * _tmp4
+    result += 1 * _tmp4.transpose(1, 0, 2, 3)
+    result += 1 * _tmp4.transpose(0, 1, 3, 2)
+    result -= 1 * _tmp4.transpose(1, 0, 3, 2)
+    del _tmp4
+    _tmp5 = einsum('Qac,Qbd,cdij->abij', B_aa[:, v, v], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result += 0.5 * _tmp5
+    del _tmp5
+    _tmp6 = einsum('Qad,Qbc,cdij->abij', B_aa[:, v, v], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result -= 0.5 * _tmp6
+    del _tmp6
+    return result
+
+
+def t2_2_abab_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no, t2_1_aaaa, t2_1_abab):
+    t2_aaaa = t2_1_aaaa
+    t2_abab = t2_1_abab
+    t2_bbbb = t2_1_aaaa
+    result = np.zeros((nv, nv, no, no))
+    _tmp0 = einsum('Qli,Qkj,ablk->abij', B_aa[:, o, o], B_bb[:, o, o], t2_abab, optimize=True)
+    result += 0.5 * _tmp0
+    result += 0.5 * _tmp0
+    del _tmp0
+    _tmp1 = einsum('Qac,Qkj,cbik->abij', B_aa[:, v, v], B_bb[:, o, o], t2_abab, optimize=True)
+    result -= 1 * _tmp1
+    del _tmp1
+    _tmp2 = einsum('Qkc,Qbj,caik->abij', B_aa[:, o, v], B_bb[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp2
+    del _tmp2
+    _tmp3 = einsum('Qkc,Qbj,acik->abij', B_bb[:, o, v], B_bb[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp3
+    del _tmp3
+    _tmp4 = einsum('Qkj,Qbc,acik->abij', B_bb[:, o, o], B_bb[:, v, v], t2_abab, optimize=True)
+    result -= 1 * _tmp4
+    del _tmp4
+    _tmp5 = einsum('Qkc,Qai,cbkj->abij', B_aa[:, o, v], B_aa[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp5
+    del _tmp5
+    _tmp6 = einsum('Qki,Qac,cbkj->abij', B_aa[:, o, o], B_aa[:, v, v], t2_abab, optimize=True)
+    result -= 1 * _tmp6
+    del _tmp6
+    _tmp7 = einsum('Qai,Qkc,cbjk->abij', B_aa[:, v, o], B_bb[:, o, v], t2_bbbb, optimize=True)
+    result -= 1 * _tmp7
+    del _tmp7
+    _tmp8 = einsum('Qki,Qbc,ackj->abij', B_aa[:, o, o], B_bb[:, v, v], t2_abab, optimize=True)
+    result -= 1 * _tmp8
+    del _tmp8
+    _tmp9 = einsum('Qac,Qbd,cdij->abij', B_aa[:, v, v], B_bb[:, v, v], t2_abab, optimize=True)
+    result += 0.5 * _tmp9
+    result += 0.5 * _tmp9
+    del _tmp9
+    return result
+
+
+def t3_2_aaaaaa_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no, t2_1_aaaa, t2_1_abab):
+    t2_aaaa = t2_1_aaaa
+    t2_abab = t2_1_abab
+    t2_bbbb = t2_1_aaaa
+    result = np.zeros((nv, nv, nv, no, no, no))
+    _tmp0 = einsum('Qlj,Qak,bcil->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp0
+    result += 1 * _tmp0.transpose(1, 0, 2, 3, 4, 5)
+    result += 1 * _tmp0.transpose(0, 1, 2, 4, 3, 5)
+    result -= 1 * _tmp0.transpose(1, 0, 2, 4, 3, 5)
+    del _tmp0
+    _tmp1 = einsum('Qlk,Qaj,bcil->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result += 1 * _tmp1
+    result -= 1 * _tmp1.transpose(1, 0, 2, 3, 4, 5)
+    result -= 1 * _tmp1.transpose(0, 1, 2, 4, 3, 5)
+    result += 1 * _tmp1.transpose(1, 0, 2, 4, 3, 5)
+    del _tmp1
+    _tmp2 = einsum('Qli,Qaj,bckl->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp2
+    result += 1 * _tmp2.transpose(1, 0, 2, 3, 4, 5)
+    del _tmp2
+    _tmp3 = einsum('Qlj,Qai,bckl->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result += 1 * _tmp3
+    result -= 1 * _tmp3.transpose(1, 0, 2, 3, 4, 5)
+    del _tmp3
+    _tmp4 = einsum('Qlj,Qck,abil->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp4
+    result += 1 * _tmp4.transpose(0, 1, 2, 4, 3, 5)
+    del _tmp4
+    _tmp5 = einsum('Qlk,Qcj,abil->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result += 1 * _tmp5
+    result -= 1 * _tmp5.transpose(0, 1, 2, 4, 3, 5)
+    del _tmp5
+    _tmp6 = einsum('Qli,Qcj,abkl->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp6
+    del _tmp6
+    _tmp7 = einsum('Qlj,Qci,abkl->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result += 1 * _tmp7
+    del _tmp7
+    _tmp8 = einsum('Qad,Qbk,dcij->abcijk', B_aa[:, v, v], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp8
+    result += 1 * _tmp8.transpose(0, 2, 1, 3, 4, 5)
+    result += 1 * _tmp8.transpose(0, 1, 2, 3, 5, 4)
+    result -= 1 * _tmp8.transpose(0, 2, 1, 3, 5, 4)
+    del _tmp8
+    _tmp9 = einsum('Qak,Qbd,dcij->abcijk', B_aa[:, v, o], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result += 1 * _tmp9
+    result -= 1 * _tmp9.transpose(0, 2, 1, 3, 4, 5)
+    result -= 1 * _tmp9.transpose(0, 1, 2, 3, 5, 4)
+    result += 1 * _tmp9.transpose(0, 2, 1, 3, 5, 4)
+    del _tmp9
+    _tmp10 = einsum('Qad,Qbi,dcjk->abcijk', B_aa[:, v, v], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp10
+    result += 1 * _tmp10.transpose(0, 2, 1, 3, 4, 5)
+    del _tmp10
+    _tmp11 = einsum('Qai,Qbd,dcjk->abcijk', B_aa[:, v, o], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result += 1 * _tmp11
+    result -= 1 * _tmp11.transpose(0, 2, 1, 3, 4, 5)
+    del _tmp11
+    _tmp12 = einsum('Qbd,Qck,daij->abcijk', B_aa[:, v, v], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp12
+    result += 1 * _tmp12.transpose(0, 1, 2, 3, 5, 4)
+    del _tmp12
+    _tmp13 = einsum('Qbk,Qcd,daij->abcijk', B_aa[:, v, o], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result += 1 * _tmp13
+    result -= 1 * _tmp13.transpose(0, 1, 2, 3, 5, 4)
+    del _tmp13
+    _tmp14 = einsum('Qbd,Qci,dajk->abcijk', B_aa[:, v, v], B_aa[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp14
+    del _tmp14
+    _tmp15 = einsum('Qbi,Qcd,dajk->abcijk', B_aa[:, v, o], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result += 1 * _tmp15
+    del _tmp15
+    return result
+
+
+def t3_2_aabaab_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no, t2_1_aaaa, t2_1_abab):
+    t2_aaaa = t2_1_aaaa
+    t2_abab = t2_1_abab
+    t2_bbbb = t2_1_aaaa
+    result = np.zeros((nv, nv, nv, no, no, no))
+    _tmp0 = einsum('Qaj,Qlk,bcil->abcijk', B_aa[:, v, o], B_bb[:, o, o], t2_abab, optimize=True)
+    result += 1 * _tmp0
+    result -= 1 * _tmp0.transpose(1, 0, 2, 3, 4, 5)
+    result -= 1 * _tmp0.transpose(0, 1, 2, 4, 3, 5)
+    result += 1 * _tmp0.transpose(1, 0, 2, 4, 3, 5)
+    del _tmp0
+    _tmp1 = einsum('Qli,Qaj,bclk->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp1
+    result -= 1 * _tmp1.transpose(1, 0, 2, 3, 4, 5)
+    del _tmp1
+    _tmp2 = einsum('Qlj,Qai,bclk->abcijk', B_aa[:, o, o], B_aa[:, v, o], t2_abab, optimize=True)
+    result -= 1 * _tmp2
+    result += 1 * _tmp2.transpose(1, 0, 2, 3, 4, 5)
+    del _tmp2
+    _tmp3 = einsum('Qlj,Qck,abil->abcijk', B_aa[:, o, o], B_bb[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp3
+    result += 1 * _tmp3.transpose(0, 1, 2, 4, 3, 5)
+    del _tmp3
+    _tmp4 = einsum('Qad,Qck,dbij->abcijk', B_aa[:, v, v], B_bb[:, v, o], t2_aaaa, optimize=True)
+    result += 1 * _tmp4
+    del _tmp4
+    _tmp5 = einsum('Qad,Qbj,dcik->abcijk', B_aa[:, v, v], B_aa[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp5
+    del _tmp5
+    _tmp6 = einsum('Qaj,Qbd,dcik->abcijk', B_aa[:, v, o], B_aa[:, v, v], t2_abab, optimize=True)
+    result -= 1 * _tmp6
+    del _tmp6
+    _tmp7 = einsum('Qaj,Qcd,bdik->abcijk', B_aa[:, v, o], B_bb[:, v, v], t2_abab, optimize=True)
+    result -= 1 * _tmp7
+    del _tmp7
+    _tmp8 = einsum('Qad,Qbi,dcjk->abcijk', B_aa[:, v, v], B_aa[:, v, o], t2_abab, optimize=True)
+    result -= 1 * _tmp8
+    del _tmp8
+    _tmp9 = einsum('Qai,Qbd,dcjk->abcijk', B_aa[:, v, o], B_aa[:, v, v], t2_abab, optimize=True)
+    result += 1 * _tmp9
+    del _tmp9
+    _tmp10 = einsum('Qai,Qcd,bdjk->abcijk', B_aa[:, v, o], B_bb[:, v, v], t2_abab, optimize=True)
+    result += 1 * _tmp10
+    del _tmp10
+    _tmp11 = einsum('Qbd,Qck,daij->abcijk', B_aa[:, v, v], B_bb[:, v, o], t2_aaaa, optimize=True)
+    result -= 1 * _tmp11
+    del _tmp11
+    _tmp12 = einsum('Qbj,Qcd,adik->abcijk', B_aa[:, v, o], B_bb[:, v, v], t2_abab, optimize=True)
+    result += 1 * _tmp12
+    del _tmp12
+    _tmp13 = einsum('Qbi,Qcd,adjk->abcijk', B_aa[:, v, o], B_bb[:, v, v], t2_abab, optimize=True)
+    result -= 1 * _tmp13
+    del _tmp13
+    return result
+
+
+def t3_2_abbabb_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no, t2_1_aaaa, t2_1_abab):
+    t2_aaaa = t2_1_aaaa
+    t2_abab = t2_1_abab
+    t2_bbbb = t2_1_aaaa
+    result = np.zeros((nv, nv, nv, no, no, no))
+    _tmp0 = einsum('Qlj,Qbk,acil->abcijk', B_bb[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp0
+    del _tmp0
+    _tmp1 = einsum('Qlk,Qbj,acil->abcijk', B_bb[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result -= 1 * _tmp1
+    del _tmp1
+    _tmp2 = einsum('Qai,Qlk,bcjl->abcijk', B_aa[:, v, o], B_bb[:, o, o], t2_bbbb, optimize=True)
+    result -= 1 * _tmp2
+    del _tmp2
+    _tmp3 = einsum('Qli,Qbk,aclj->abcijk', B_aa[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp3
+    del _tmp3
+    _tmp4 = einsum('Qai,Qlj,bckl->abcijk', B_aa[:, v, o], B_bb[:, o, o], t2_bbbb, optimize=True)
+    result += 1 * _tmp4
+    del _tmp4
+    _tmp5 = einsum('Qli,Qbj,aclk->abcijk', B_aa[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result -= 1 * _tmp5
+    del _tmp5
+    _tmp6 = einsum('Qlj,Qck,abil->abcijk', B_bb[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result -= 1 * _tmp6
+    del _tmp6
+    _tmp7 = einsum('Qlk,Qcj,abil->abcijk', B_bb[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp7
+    del _tmp7
+    _tmp8 = einsum('Qli,Qck,ablj->abcijk', B_aa[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result -= 1 * _tmp8
+    del _tmp8
+    _tmp9 = einsum('Qli,Qcj,ablk->abcijk', B_aa[:, o, o], B_bb[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp9
+    del _tmp9
+    _tmp10 = einsum('Qad,Qbk,dcij->abcijk', B_aa[:, v, v], B_bb[:, v, o], t2_abab, optimize=True)
+    result -= 1 * _tmp10
+    result += 1 * _tmp10.transpose(0, 2, 1, 3, 4, 5)
+    result += 1 * _tmp10.transpose(0, 1, 2, 3, 5, 4)
+    result -= 1 * _tmp10.transpose(0, 2, 1, 3, 5, 4)
+    del _tmp10
+    _tmp11 = einsum('Qai,Qbd,dcjk->abcijk', B_aa[:, v, o], B_bb[:, v, v], t2_bbbb, optimize=True)
+    result += 1 * _tmp11
+    result -= 1 * _tmp11.transpose(0, 2, 1, 3, 4, 5)
+    del _tmp11
+    _tmp12 = einsum('Qbd,Qck,adij->abcijk', B_bb[:, v, v], B_bb[:, v, o], t2_abab, optimize=True)
+    result += 1 * _tmp12
+    result -= 1 * _tmp12.transpose(0, 1, 2, 3, 5, 4)
+    del _tmp12
+    _tmp13 = einsum('Qbk,Qcd,adij->abcijk', B_bb[:, v, o], B_bb[:, v, v], t2_abab, optimize=True)
+    result -= 1 * _tmp13
+    result += 1 * _tmp13.transpose(0, 1, 2, 3, 5, 4)
+    del _tmp13
+    return result
+
+
+def t1_3_aa_numerator_df(B_aa, B_bb, d_aa, o, v, nv, no, t1_2_aa, t2_2_aaaa, t2_2_abab, t3_2_aaaaaa, t3_2_aabaab, t3_2_abbabb):
+    t1_aa = t1_2_aa
+    t1_bb = t1_2_aa
+    t2_aaaa = t2_2_aaaa
+    t2_abab = t2_2_abab
+    t2_bbbb = t2_2_aaaa
+    t3_aaaaaa = t3_2_aaaaaa
+    t3_aabaab = t3_2_aabaab
+    t3_abbabb = t3_2_abbabb
+    t3_bbbbbb = t3_2_aaaaaa
+    result = np.zeros((nv, no))
+    _tmp0 = einsum('Qjb,Qai,bj->ai', B_aa[:, o, v], B_aa[:, v, o], t1_aa, optimize=True)
+    result += 1 * _tmp0
+    del _tmp0
+    _tmp1 = einsum('Qji,Qab,bj->ai', B_aa[:, o, o], B_aa[:, v, v], t1_aa, optimize=True)
+    result -= 1 * _tmp1
+    del _tmp1
+    _tmp2 = einsum('Qai,Qjb,bj->ai', B_aa[:, v, o], B_bb[:, o, v], t1_bb, optimize=True)
+    result += 1 * _tmp2
+    del _tmp2
+    _tmp3 = einsum('Qkb,Qji,bakj->ai', B_aa[:, o, v], B_aa[:, o, o], t2_aaaa, optimize=True)
+    result -= 0.5 * _tmp3
+    del _tmp3
+    _tmp4 = einsum('Qki,Qjb,bakj->ai', B_aa[:, o, o], B_aa[:, o, v], t2_aaaa, optimize=True)
+    result += 0.5 * _tmp4
+    del _tmp4
+    _tmp5 = einsum('Qki,Qjb,abkj->ai', B_aa[:, o, o], B_bb[:, o, v], t2_abab, optimize=True)
+    result -= 0.5 * _tmp5
+    result -= 0.5 * _tmp5
+    del _tmp5
+    _tmp6 = einsum('Qjb,Qac,bcij->ai', B_aa[:, o, v], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result -= 0.5 * _tmp6
+    del _tmp6
+    _tmp7 = einsum('Qjc,Qab,bcij->ai', B_aa[:, o, v], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result += 0.5 * _tmp7
+    del _tmp7
+    _tmp8 = einsum('Qab,Qjc,bcij->ai', B_aa[:, v, v], B_bb[:, o, v], t2_abab, optimize=True)
+    result += 0.5 * _tmp8
+    result += 0.5 * _tmp8
+    del _tmp8
+    _tmp9 = einsum('Qkb,Qjc,bcaikj->ai', B_aa[:, o, v], B_aa[:, o, v], t3_aaaaaa, optimize=True)
+    result += 0.25 * _tmp9
+    del _tmp9
+    _tmp10 = einsum('Qkc,Qjb,bcaikj->ai', B_aa[:, o, v], B_aa[:, o, v], t3_aaaaaa, optimize=True)
+    result -= 0.25 * _tmp10
+    del _tmp10
+    _tmp11 = einsum('Qkb,Qjc,bacikj->ai', B_aa[:, o, v], B_bb[:, o, v], t3_aabaab, optimize=True)
+    result -= 0.25 * _tmp11
+    result -= 0.25 * _tmp11
+    del _tmp11
+    _tmp12 = einsum('Qkc,Qjb,acbikj->ai', B_aa[:, o, v], B_bb[:, o, v], t3_aabaab, optimize=True)
+    result += 0.25 * _tmp12
+    result += 0.25 * _tmp12
+    del _tmp12
+    _tmp13 = einsum('Qkb,Qjc,acbikj->ai', B_bb[:, o, v], B_bb[:, o, v], t3_abbabb, optimize=True)
+    result -= 0.25 * _tmp13
+    del _tmp13
+    _tmp14 = einsum('Qkc,Qjb,acbikj->ai', B_bb[:, o, v], B_bb[:, o, v], t3_abbabb, optimize=True)
+    result += 0.25 * _tmp14
+    del _tmp14
+    return result
+
+
+def t1_3_aa_numerator_no_t3_df(B_aa, B_bb, d_aa, o, v, nv, no, t1_2_aa, t2_2_aaaa, t2_2_abab):
+    t1_aa = t1_2_aa
+    t1_bb = t1_2_aa
+    t2_aaaa = t2_2_aaaa
+    t2_abab = t2_2_abab
+    t2_bbbb = t2_2_aaaa
+    result = np.zeros((nv, no))
+    _tmp0 = einsum('Qjb,Qai,bj->ai', B_aa[:, o, v], B_aa[:, v, o], t1_aa, optimize=True)
+    result += 1 * _tmp0
+    del _tmp0
+    _tmp1 = einsum('Qji,Qab,bj->ai', B_aa[:, o, o], B_aa[:, v, v], t1_aa, optimize=True)
+    result -= 1 * _tmp1
+    del _tmp1
+    _tmp2 = einsum('Qai,Qjb,bj->ai', B_aa[:, v, o], B_bb[:, o, v], t1_bb, optimize=True)
+    result += 1 * _tmp2
+    del _tmp2
+    _tmp3 = einsum('Qkb,Qji,bakj->ai', B_aa[:, o, v], B_aa[:, o, o], t2_aaaa, optimize=True)
+    result -= 0.5 * _tmp3
+    del _tmp3
+    _tmp4 = einsum('Qki,Qjb,bakj->ai', B_aa[:, o, o], B_aa[:, o, v], t2_aaaa, optimize=True)
+    result += 0.5 * _tmp4
+    del _tmp4
+    _tmp5 = einsum('Qki,Qjb,abkj->ai', B_aa[:, o, o], B_bb[:, o, v], t2_abab, optimize=True)
+    result -= 0.5 * _tmp5
+    result -= 0.5 * _tmp5
+    del _tmp5
+    _tmp6 = einsum('Qjb,Qac,bcij->ai', B_aa[:, o, v], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result -= 0.5 * _tmp6
+    del _tmp6
+    _tmp7 = einsum('Qjc,Qab,bcij->ai', B_aa[:, o, v], B_aa[:, v, v], t2_aaaa, optimize=True)
+    result += 0.5 * _tmp7
+    del _tmp7
+    _tmp8 = einsum('Qab,Qjc,bcij->ai', B_aa[:, v, v], B_bb[:, o, v], t2_abab, optimize=True)
+    result += 0.5 * _tmp8
+    result += 0.5 * _tmp8
+    del _tmp8
+    return result
+

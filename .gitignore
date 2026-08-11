@@ -1,0 +1,17 @@
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local calculation output
+results/
+calculations/
+density_matrices/
+scratch/
+
+# macOS Finder metadata
+.DS_Store
+
+# pytest
+.pytest_cache/
