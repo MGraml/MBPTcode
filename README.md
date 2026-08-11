@@ -4,9 +4,6 @@ Many-body perturbation theory for molecular systems, on top of
 [PySCF](https://pyscf.org/): Dyson IP/EA-ADC, MPn density matrices, coupled
 cluster, GW and linear response.
 
-Everything here is hand-written: there is no code generator, and no
-generated ADC code. All physics is in plain, readable NumPy.
-
 ## Methods
 
 **ADC** — Dyson IP/EA-ADC in the algebraic-diagrammatic-construction
@@ -18,15 +15,15 @@ hierarchy.
 | UHF / spin-orbital | ADC(3) |
 
 Both branches have dense and matrix-free (Davidson) routes, density
-fitting, Epstein-Nesbet denominator dressing, static self-energy
-corrections, and a Lanczos/continued-fraction spectral solver.
+fitting, Epstein-Nesbet denominator dressing, and static self-energy
+corrections.
 
 **Density matrices** — MP2 through MP5 correlated 1-RDMs, restricted and
 unrestricted, dense and DF, with Laplace-fused amplitude routes. GW and
-CCSD/CCSDT density matrices too.
+CCSD/CCSDT density matrices too. Generated with pdaggerq
 
 **Coupled cluster** — CCSD and CCSDT amplitudes and lambda equations,
-restricted and spin-orbital, plus EOM-CC (IP/EA/EE).
+restricted and spin-orbital, plus EOM-CC (IP/EA/EE). Generated with pdaggerq
 
 **Screening** — static RPA screened Coulomb interaction W, and the screened
 C^(1) block of the screened multichannel Dyson equation.
