@@ -2,7 +2,7 @@
 
 Many-body perturbation theory for molecular systems, on top of
 [PySCF](https://pyscf.org/): Dyson IP/EA-ADC, MPn density matrices, coupled
-cluster, GW and linear response.
+cluster, GW and linear response. Co-authored by Claude.
 
 ## Methods
 
