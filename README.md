@@ -7,7 +7,8 @@ cluster, GW and linear response.
 ## Methods
 
 **ADC** — Dyson IP/EA-ADC in the algebraic-diagrammatic-construction
-hierarchy.
+hierarchy of Schirmer, Cederbaum and Walter,
+[Phys. Rev. A 28, 1237 (1983)](https://doi.org/10.1103/PhysRevA.28.1237).
 
 | branch | levels |
 |---|---|
@@ -26,7 +27,8 @@ CCSD/CCSDT density matrices too. Generated with pdaggerq.
 restricted and spin-orbital, plus EOM-CC (IP/EA/EE). Generated with pdaggerq.
 
 **Screening** — static RPA screened Coulomb interaction W, and the screened
-C^(1) block of the screened multichannel Dyson equation.
+C^(1) block of the screened multichannel Dyson equation, following
+Romaniello and Berger, [arXiv:2603.27329](https://arxiv.org/abs/2603.27329).
 
 **GW / linear response** — G0W0 and eigenvalue-self-consistent GW on the
 real and imaginary axes, Casida/RPA/BSE, RPA correlation energies.
