@@ -64,7 +64,6 @@ def self_energy_imaginary_time(X, D, W_tilde_aux_tau, eps, nocc, tau_points,
     return sig_l, sig_g
 
 
-
 def self_energy_fit_ranges(eps, nocc, mu=None):
     """
     The two exponential-decay ranges the space-time self-energy needs.
@@ -528,77 +527,6 @@ def self_energy_matrix_imaginary_time(X_ao, D, W_omega, mo_coeff, eps, nocc,
             out.imag[w] += S[w, k] * odd_k
     out *= -0.5
     return out
-
-
-def self_energy_matrix_imaginary_time_df(df_coeff, W_omega, eps, nocc,
-                                         tau_points, omega_in, omega_out,
-                                         mu=None, ranges=None, Wt_tau=None):
-    """Full Sigma^c_pq(i.omega) from a DENSE three-index tensor, via imaginary time.
-
-    The peer of `self_energy_matrix_imaginary_time` for a caller that has a
-    dense (naux, norb, norb) DF tensor rather than the separable pair (X, D).
-    Everything above the contraction is shared -- the same two fitted ranges,
-    the same W(i.omega) -> W(i.tau) cosine transform, the same even/odd
-    recombination -- so the two agree on the physics and differ only in how the
-    aux index is carried.
-
-    WHY A SECOND KERNEL EXISTS. The separable route's O(N^3) rests on the
-    Hadamard product `Zt * G` between two (M, M) matrices, which needs the
-    co-densities factorized as X_P,mu X_P,nu. A dense B has no such structure,
-    so the aux index cannot be folded away and the cost per tau is
-    O(naux^2 norb^2 + naux norb^3) -- the same per-point cost as the
-    frequency-axis form it replaces. What imaginary time buys here is therefore
-    NOT a better exponent: it is the point count, ~24 minimax tau against the
-    96 Gauss-Legendre frequencies that route needed, because Sigma(i.tau) is a
-    product where Sigma(i.omega) was a convolution.
-
-    Sigma_pq(i.tau) = sum_m G_m(i.tau) sum_PQ B_P,pm Wc_PQ(i.tau) B_Q,mq
-
-    with G split into its lesser (occupied) and greater (virtual) parts, which
-    is what makes the tau -> omega transform separate into a cosine piece on
-    the even combination and a sine piece on the odd one.
-
-    Passing eps - mu with mu = 0 returns Sigma_pq(i.omega), matching the
-    convention of the frequency-axis form; passing raw eps and mu returns
-    Sigma_pq(mu + i.omega), matching `self_energy_matrix_imaginary_time`.
-
-    Wt_tau: W already on the time grid, as on the separable kernels; W_omega is
-    then ignored.
-    """
-    occ, virt = get_occ_virt_indices(eps, nocc)
-    if mu is None:
-        mu = 0.5 * (eps[occ].max() + eps[virt].min())
-    rW, rS = ranges or self_energy_fit_ranges(eps, nocc, mu=mu)
-
-    if Wt_tau is None:
-        Ctw, _ = minimax_transform_weights(COSINE_WT, tau_points, omega_in, *rW)
-        Wt_tau = _transform_screened(Ctw, W_omega)
-
-    naux, norb, _ = df_coeff.shape
-    B_flat = df_coeff.reshape(naux, -1)
-    e_o, e_v = eps[occ] - mu, eps[virt] - mu
-
-    ntau = len(tau_points)
-    sig_l = np.zeros((ntau, norb, norb))
-    sig_g = np.zeros((ntau, norb, norb))
-    for k in range(ntau):
-        tau = tau_points[k]
-        # (W B)_Q,pm then contract the aux index against B_Q,mq. Building A once
-        # per tau and reweighting its middle index is the same factorization the
-        # frequency-axis form used across query points -- here the reweighting
-        # is the Green's function exponential instead.
-        WB = (Wt_tau[k] @ B_flat).reshape(naux, norb, norb)
-        A = np.einsum('Qpm,Qmq->pmq', WB, df_coeff, optimize=True)
-        sig_l[k] = np.einsum('pmq,m->pq', A[:, occ, :], np.exp(e_o * tau),
-                             optimize=True)
-        sig_g[k] = -np.einsum('pmq,m->pq', A[:, virt, :], np.exp(-e_v * tau),
-                              optimize=True)
-
-    C, _ = minimax_transform_weights(COSINE_TW, tau_points, omega_out, *rS)
-    S, _ = minimax_transform_weights(SINE_TW, tau_points, omega_out, *rS)
-    even = np.tensordot(C, sig_g + sig_l, axes=(1, 0))
-    odd = np.tensordot(S, sig_g - sig_l, axes=(1, 0))
-    return -0.5 * (even + 1j * odd)
 
 
 def sigma_ao_to_mo(sigma_ao, mo_coeff):
