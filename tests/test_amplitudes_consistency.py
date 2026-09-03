@@ -68,10 +68,23 @@ if __name__ == '__main__':
     print(f"get_chi_b_vertex_full: p_state-sliced == full[:, :, p_state]: {'OK' if ok else 'FAIL'} "
           f"(max diff={np.max(np.abs(chi_b_sliced_e - chi_b_full_e[:, :, p_state])):.2e})")
 
-    # DF and full-ERI should agree closely for this tiny basis (small fitting error).
-    ok = np.max(np.abs(chi_a_sliced - chi_a_sliced_e)) < 1e-3
+    # DF vs full-ERI, on Sigma rather than on chi_a. chi_a is built from the
+    # Casida eigenvectors, and HF/sto-3g has degenerate excitations (closest pair
+    # 4e-16 apart), so X and Y are fixed only up to a rotation inside that
+    # subspace. Two independent diagonalizations pick different rotations and
+    # chi_a inherits it: 8.6e-02 here, no matter how good the fit is. Sigma sums
+    # over the whole subspace, so the rotation cancels and what is left is the
+    # fitting error -- 5.0e-06 against the 2.1e-04 the ERIs themselves carry.
+    grid = np.linspace(eps[p_state] - 0.3, eps[p_state] + 0.3, 25)
+    sig_df = np.asarray(se_df.calculate_self_energy(p_state, grid, nocc, omega,
+                                                    chi_a_sliced))
+    sig_full = np.asarray(se_full.calculate_self_energy(p_state, grid, nocc,
+                                                        omega_f, chi_a_sliced_e))
+    diff = np.max(np.abs(sig_df - sig_full))
+    ok = diff < 1e-4
     all_ok &= ok
-    print(f"DF vs full-ERI chi_a agree to <1e-3: {'OK' if ok else 'FAIL'}")
+    print(f"DF vs full-ERI Sigma agree to <1e-4: {'OK' if ok else 'FAIL'} "
+          f"(max diff={diff:.2e})")
 
     print("\nALL PASSED" if all_ok else "\nFAILURES DETECTED")
     sys.exit(0 if all_ok else 1)
