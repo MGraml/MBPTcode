@@ -11,6 +11,7 @@ All use H2O/cc-pVDZ unless noted, so the numbers are directly comparable.
 | `06_open_shell.py` | UHF / spin-orbital ADC(3) |
 | `07_several_states.py` | several ionization states with pole strengths |
 | `08_en_adc3_screened_singles.py` | EN-ADC(3) singles shift, bare vs RPA-screened (BSE-kernel channel split) |
+| `09_isdf_gw_space_time.py` | cubic-scaling GW: an ISDF SCF, then the space-time self-energy on its factors |
 
 ## Choosing a route
 
@@ -36,4 +37,14 @@ only valid for the bare amplitude.
 02  IP = 12.226 eV   Z = 0.936   (DF)
 03  IP = 11.875 eV   Z = 0.929   (EN, spin-adapted)
 06  IP =  8.965 eV   Z = 0.953   (UHF / spin-orbital)
+09  E(ISDF-SCF) = -76.02774739 Ha   G0W0 HOMO = -12.155 eV   (space-time)
 ```
+
+## Large systems
+
+`09_isdf_gw_space_time.py` is the production route once the dense `cderi` stops
+fitting: the SCF and the GW share ONE separable (ISDF) factorization, which is
+both the cheaper choice and the correct one — pairing factors from one fit with
+a screened interaction from another stays self-consistent and silently moves the
+spectrum. Pass `freq_block=` or `scratch_dir=` to `solve_qp_energy_space_time`
+when even the frequency-axis W does not fit; the answer is unchanged.
