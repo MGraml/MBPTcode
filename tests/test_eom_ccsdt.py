@@ -18,7 +18,7 @@ Two independent oracles:
      sigma equations, since pyscf has no EOM-CCSDT.
 
 Also exercises transition densities / static polarizability (needed for
-src/SingleReference/GW/gw_polarizability.py): validated against determinant_space
+src/SingleReference/GW/cc_polarizability.py): validated against determinant_space
 directly (machine precision) and, independently, against finite-field FCI for
 H2 (where EOM-CCSDT is exact) -- a fully independent numerical check with no
 shared code path.

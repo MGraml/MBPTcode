@@ -13,7 +13,7 @@
                               imaginary time, and W(i tau) itself
     space_time.py             solve_qp_energy_space_time: the O(N^3) route,
                               imaginary time on separable (ISDF) factors
-    gw_polarizability.py      G0W@CC -- the RPA polarizability replaced by an
+    cc_polarizability.py      G0W@CC -- the RPA polarizability replaced by an
                               EOM-CC one, through CC/eom.py
 
 Davidson note: the three iterative eigensolvers in this tree --

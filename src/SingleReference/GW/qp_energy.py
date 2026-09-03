@@ -20,7 +20,7 @@ from src.Base.solvent_screening import solvent_static_selfenergy
 from src.SingleReference.LinearResponse.casida import CasidaSolver
 from src.SingleReference.LinearResponse.linear_response import LinearResponseSolver
 from src.SingleReference.GW.self_energy import SelfEnergySolver
-from src.SingleReference.GW.gw_polarizability import GWCCSelfEnergy
+from src.SingleReference.GW.cc_polarizability import GWCCSelfEnergy
 from src.SingleReference.GW.imaginary_axis import solve_qp_energy_imaginary_axis
 from src.SingleReference.GW.space_time import solve_qp_energy_space_time
 from src.Solvers.qp_equation import solve_qp_equation
@@ -42,7 +42,7 @@ def calc_qp_energy(mf, selfenergy='GW', polarizability='RPA', df=True,
                     among them, always use RPA; vertex screening always uses the
                     static RPA W. 'CCSD'/'CCSDT' replaces the Casida
                     polarizability with an EOM-CC one (G0W@CC, Lewis and
-                    Berkelbach), a separate spin-orbital path in gw_polarizability.py.
+                    Berkelbach), a separate spin-orbital path in cc_polarizability.py.
     mode:           how Sigma_c is built; see the module docstring. The two
                     imaginary-axis routes implement GW@RPA only and reject every
                     other combination rather than silently downgrading it.

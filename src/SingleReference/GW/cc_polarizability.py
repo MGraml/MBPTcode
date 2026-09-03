@@ -15,7 +15,7 @@ Spin-orbital, full-ERI. EOM-CCSDT (or CCSD) via eom.py's generated
 sigma-vector Davidson solver -- scales far better than exact determinant
 enumeration, though still full-ERI/no-symmetry so realistically small-to-
 medium systems only. Validated against the paper's Table 1 (H2/He, def2-SVP)
-by tests/test_gw_polarizability.py.
+by tests/test_cc_polarizability.py.
 
 Reached from the usual front end as
 calc_qp_energy(mf, selfenergy='GW', polarizability='ccsdt', state=...); this
