@@ -21,17 +21,32 @@ class ElpaEigensolver:
         self.my_prow = self.rank % self.Pr
         self.my_pcol = self.rank // self.Pr
 
-        self.local_rows = self._numroc(self.global_N, self.Nb, self.my_prow, self.Pr)
-        self.local_cols = self._numroc(self.global_N, self.Nb, self.my_pcol, self.Pc)
+        self.local_rows = self._numroc(self.global_N, self.Nb, self.my_prow, 0, self.Pr)
+        self.local_cols = self._numroc(self.global_N, self.Nb, self.my_pcol, 0, self.Pc)
 
         self.elpa_ctx = elpa.Elpa()
         self._configure_elpa()
 
     def _numroc(self, n, nb, iproc, isrcproc, nprocs):
-        """ScaLAPACK's NUMROC (Number of Rows/Cols) utility function."""
+        """ScaLAPACK's NUMROC: rows (or columns) of an n x n block-cyclic matrix
+        owned by process `iproc`, blocks of `nb`, distribution starting at
+        `isrcproc`.
+
+        The whole-block and remainder terms are separate cases and the earlier
+        one-line form conflated them: it dropped the leftover blocks entirely, so
+        the pieces summed to less than n whenever nblocks was not a multiple of
+        nprocs (8 of 10 rows at n=10, nb=2, nprocs=2). Pinned in
+        tests/test_numroc.py, which checks the partition rather than the formula.
+        """
         mydist = (nprocs + iproc - isrcproc) % nprocs
         nblocks = n // nb
-        return (nblocks // nprocs) * nb + min(max(n - (nblocks * nb) - mydist * nb, 0), nb)
+        out = (nblocks // nprocs) * nb
+        extrablks = nblocks % nprocs
+        if mydist < extrablks:
+            return out + nb
+        if mydist == extrablks:
+            return out + n % nb
+        return out
 
     def _configure_elpa(self):
         """Sets up the ELPA parameters before memory is allocated."""
