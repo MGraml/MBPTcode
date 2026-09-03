@@ -54,7 +54,7 @@ _PATH_CACHE = {}
 _OPTIMAL_MAX_OPERANDS = 4
 
 # Debug-only rank ceiling, gated by an env var so it costs nothing (and
-# doesn't need opt_einsum) when unset -- set WICKS_MAX_EINSUM_RANK=4 to
+# doesn't need opt_einsum) when unset -- set MBPT_MAX_EINSUM_RANK=4 to
 # enforce, e.g., the MP2/MP3 density paths' "no rank>4 array" invariant
 # (see src/SingleReference/DensityMatrix/mpn_density_driver_restricted.py/
 # mpn_density_driver_unrestricted.py's Laplace-fusion docstrings). Checks
@@ -65,7 +65,7 @@ _OPTIMAL_MAX_OPERANDS = 4
 # literal rank>4 array showing up as a Python variable. Only runs once per
 # distinct (subscripts, shapes) key, the same lifetime as the path cache
 # itself, so it doesn't add per-call overhead in a hot loop.
-_ASSERT_MAX_RANK = os.environ.get('WICKS_MAX_EINSUM_RANK')
+_ASSERT_MAX_RANK = os.environ.get('MBPT_MAX_EINSUM_RANK')
 
 
 def _assert_ranks_ok(subscripts, operands, strategy, max_rank):

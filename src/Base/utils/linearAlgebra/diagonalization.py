@@ -1,4 +1,5 @@
 import os
+import warnings
 
 import numpy as np
 import scipy.linalg as la
@@ -12,14 +13,14 @@ import scipy.linalg as la
 # merely importing this module killed the job with a bare
 #     Abort(...) Fatal error in internal_Init_thread ... ucx function returned
 #     with failed status
-# and no Python traceback. That reached the periodic RPA driver via
-# casida.py -> diagonalization.py, code that never uses ELPA at all.
+# and no Python traceback. It reached callers that never use ELPA at all, via
+# casida.py -> diagonalization.py.
 #
 # Deferring the import is the whole fix: code that never asks for a large
-# diagonalization (the periodic RPA path) now never initializes MPI, so it cannot
-# abort. Code that DOES cross the ELPA threshold still gets ELPA automatically,
+# diagonalization now never initializes MPI, so it cannot abort. Code that
+# DOES cross the ELPA threshold still gets ELPA automatically,
 # exactly as before -- no behaviour change where ELPA was actually wanted.
-# Set WICKS_USE_ELPA=0 to force the scipy path even above the threshold (useful
+# Set MBPT_USE_ELPA=0 to force the scipy path even above the threshold (useful
 # on a node with a broken interconnect, where MPI_Init would abort).
 MPI = None
 ElpaEigensolver = None
@@ -33,7 +34,7 @@ def _try_init_mpi():
     if _MPI_TRIED:
         return HAS_MPI
     _MPI_TRIED = True
-    if os.environ.get('WICKS_USE_ELPA', '').lower() in ('0', 'false', 'no'):
+    if os.environ.get('MBPT_USE_ELPA', '').lower() in ('0', 'false', 'no'):
         return False                                  # explicit opt-OUT only
     try:
         from mpi4py import MPI as _MPI                       # may MPI_Init here
@@ -110,8 +111,22 @@ def diagonalize_matrix(M, threshold=5000):
             M_local = M[np.ix_(global_i, global_j)]
             eigenvalues, Z_local = solver.solve(M_local)
             return eigenvalues, Z_local, True, solver, comm
-        except Exception:
-            pass
+        except Exception as exc:
+            # Do not fail silently: without this the caller cannot tell a
+            # distributed solve from a local one, and the local fallback has a
+            # hard size ceiling (below) that the distributed path does not.
+            warnings.warn(f'distributed ELPA diagonalization unavailable at '
+                          f'N={global_N} ({type(exc).__name__}: {exc}); falling '
+                          f'back to a local solve', RuntimeWarning, stacklevel=2)
 
-    eigenvalues, Z = la.eigh(M, driver='evd')
+    # Driver choice is a correctness matter, not a tuning knob. 'evd'
+    # (divide-and-conquer) needs 1 + 6N + 2N^2 workspace, which crosses
+    # INT32_MAX at N ~ 32700 and then fails outright against a 32-bit LAPACK:
+    #   "Too large work array required -- computation cannot be performed with
+    #    standard 32-bit LAPACK."
+    # For a Casida problem that is N_ov, so it bites between anthracene
+    # (N_ov = 24111, 0.54 x INT32_MAX) and tetracene (38880, 1.41 x).
+    # 'evr' (RRR) needs O(N) workspace instead and has no such ceiling.
+    driver = 'evd' if 1 + 6*global_N + 2*global_N**2 <= 2**31 - 1 else 'evr'
+    eigenvalues, Z = la.eigh(M, driver=driver)
     return eigenvalues, Z, False, None, None

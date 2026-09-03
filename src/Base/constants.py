@@ -1,5 +1,11 @@
 """Numeric defaults and self-energy method registry shared across src/SingleReference/."""
 
+# Physical constants, CODATA 2018. Defined here and nowhere else: import them,
+# never re-spell the digits, so every route reports the same number.
+HARTREE_TO_EV = 27.211386245988
+HARTREE_TO_KCAL = 627.509474
+BOHR_TO_ANGSTROM = 0.52917721092
+
 # Lorentzian broadening for self-energy denominators / spectral functions.
 DEFAULT_BROADENING_ETA = 1e-3
 
