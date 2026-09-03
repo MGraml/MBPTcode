@@ -21,9 +21,18 @@ Sigma(mu - i.w) is the conjugate of Sigma(mu + i.w). Note that 7 is weak --
 it holds whenever the fitted cosine weights are even in omega and the sine
 weights odd, which is a property of the transform rather than of the
 self-energy assembly, and it comes out at exactly zero.
+
+Check 8 covers the low-memory branch (`freq_block`, `scratch_dir`) THROUGH the
+driver. Nothing in src/ sets either, so it is only entered when a caller opts
+in -- and it shipped with three of its arguments unbound, which byte-compiles
+and raises NameError the moment the branch runs. Checks 2-3 reach the blocked
+kernel directly and check 4 calls the driver in core, so every one of them
+passed while the branch a large run actually takes was broken.
 """
 import os
+import shutil
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -184,6 +193,33 @@ if __name__ == '__main__':
     all_ok &= ok7
     print(f'7. Sigma(-i.w) == conj Sigma(+i.w): rel={d_conj:.2e}  '
           f'{"OK" if ok7 else "FAIL"}')
+
+    # 8. The LOW-MEMORY branch, through the driver. Check 4 calls the driver but
+    #    with neither freq_block nor scratch_dir, so it only ever exercised the
+    #    in-core path; checks 2 and 3 reach the blocked KERNEL directly, which
+    #    made the file read as though blocking were covered. Nothing in src/
+    #    sets either kwarg, so this branch is only entered when a caller opts in
+    #    -- which is exactly when the system is large enough that failing costs
+    #    hours of fitting first. It is not a large-system path in any other
+    #    sense: no size threshold gates it, so it reproduces here in seconds.
+    print('8. low-memory branch through the driver:')
+    ok8 = True
+    scratch = tempfile.mkdtemp(prefix='st_blocked_')
+    try:
+        for kw in ({'freq_block': 4}, {'freq_block': 1},
+                   {'freq_block': 2, 'screen_r_cut': 6.0},
+                   {'scratch_dir': scratch}):
+            got = solve_qp_energy_space_time(mf, mol, nocc, nocc - 1,
+                                             factors=(X_mo, D, X_ao, coords),
+                                             **kw) * HARTREE_TO_EV
+            d = abs(got - base) * 1e3
+            ok = d < 1e-3
+            ok8 &= ok
+            print(f'   {str(kw):<38} HOMO {got:.6f} eV  d={d:.5f} meV'
+                  f'  {"OK" if ok else "FAIL"}')
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    all_ok &= ok8
 
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     sys.exit(0 if all_ok else 1)

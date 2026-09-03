@@ -277,7 +277,8 @@ def solve_qp_energy_space_time(mf, mol, nocc, p_state,
         return _qp_blocked(X_mo, D, mf, mol, eps, nocc, mu, grid, tau_points,
                            freq_points, pade_freq, p_state, want_static, extras,
                            ntau, nranks, freq_block, scratch_dir, solver_mode,
-                           dm_correction, greedy, timings)
+                           dm_correction, greedy, timings, X_ao, coords,
+                           screen_r_cut)
 
     _t = _time.time()
     chi0 = chi0_imaginary_frequency(X_mo, D, eps, nocc, grid, mu=mu,
@@ -321,7 +322,7 @@ def solve_qp_energy_space_time(mf, mol, nocc, p_state,
 def _qp_blocked(X_mo, D, mf, mol, eps, nocc, mu, grid, tau_points, freq_points,
                 pade_freq, p_state, want_static, extras, ntau, nranks,
                 freq_block, scratch_dir, solver_mode, dm_correction, greedy,
-                timings):
+                timings, X_ao, coords, screen_r_cut):
     """Low-memory branch: chi0 is never formed.
 
     Frequencies are built, inverted and folded into Wt(i.tau) a block at a time,
