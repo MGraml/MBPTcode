@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import numpy as np
 from pyscf import df, dft, gto, scf
 
-from src.Base.isdf_jk import ISDFJK, isdf_jk, range_coulomb
+from src.Base.isdf_jk import (ISDFJK, isdf_jk, range_coulomb,
+                              separable_factors_from_jk)
+from src.SingleReference.GW.space_time import separable_factors
 from src.Base.constants import HARTREE_TO_EV
 
 WATER = 'O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692'
@@ -160,6 +162,40 @@ def main():
     nocc = mol.nelectron // 2
     dh = (tst.mo_energy[nocc - 1] - ref.mo_energy[nocc - 1]) * HARTREE_TO_EV * 1e3
     ok &= check(abs(dh) < 50.0, 'HOMO within 50 meV', 'd = %+.1f meV' % dh)
+
+    # The bridge a GW/BSE on top of an ISDF SCF goes through. Its whole claim is
+    # that ISDFJK.build and space_time.separable_factors construct the SAME
+    # factorization, so the second build can be skipped -- and, the part that
+    # does not announce itself, that the factors come back in the SAME auxiliary
+    # gauge. Pairing factors from one fit with a W from another stays
+    # self-consistent and moves the spectrum, so an equality is the only check
+    # that catches it; a tolerance on the energy would not.
+    print('\n=== separable_factors_from_jk: the SCF fit, reused ===')
+    sf = isdf_jk(scf.RHF(mol), auxbasis='cc-pvdz-ri')
+    sf.conv_tol = 1e-10
+    sf.verbose = 0
+    sf.kernel()
+    Xmo_jk, D_jk, Xao_jk, co_jk = separable_factors_from_jk(sf)
+    Xmo_st, D_st, Xao_st, co_st = separable_factors(sf, mol, auxbasis='cc-pvdz-ri')
+    ok &= check(np.abs(co_jk - co_st).max() < 1e-12, 'same interpolation grid',
+                '%.1e' % np.abs(co_jk - co_st).max())
+    ok &= check(np.abs(Xao_jk - Xao_st).max() < 1e-12, 'same AO collocation',
+                '%.1e' % np.abs(Xao_jk - Xao_st).max())
+    ok &= check(np.abs(Xmo_jk - Xmo_st).max() < 1e-12, 'same MO collocation',
+                '%.1e' % np.abs(Xmo_jk - Xmo_st).max())
+    # D itself, not just Z = D D^T: an orthogonal rotation of the aux index
+    # leaves Z invariant, which is exactly the gauge difference that survives
+    # every ERI check and still corrupts a mixed-fit W.
+    dD = np.abs(D_jk - D_st).max()
+    dZ = np.abs(D_jk @ D_jk.T - D_st @ D_st.T).max()
+    ok &= check(dD < 1e-12, 'same auxiliary GAUGE (D, not merely Z)',
+                '|dD| = %.1e, |dZ| = %.1e' % (dD, dZ))
+
+    try:
+        separable_factors_from_jk(scf.RHF(mol).density_fit())
+        ok &= check(False, 'refuses a mean field that did not fit an ISDF')
+    except TypeError:
+        ok &= check(True, 'refuses a mean field that did not fit an ISDF')
 
     print('\nALL PASSED' if ok else '\nFAILURES DETECTED')
     return 0 if ok else 1
