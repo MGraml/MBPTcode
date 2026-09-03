@@ -820,6 +820,12 @@ def atomic_frames(mol, decay=_FRAME_DECAY, degeneracy_tol=_FRAME_DEGEN):
     axial degeneracy of a diatomic). For those the lab frame is used, which is
     harmless exactly when the environment is symmetric enough to cause the
     degeneracy in the first place.
+
+    The axes as LINES are covariant under a global rotation, and that is what
+    places the grid: signs only permute rows (see the sign block below). Axis
+    signs come from fixed generic references, so the frame is a deterministic
+    function of the geometry -- reproducible across LAPACK builds -- but it is
+    NOT a continuous one, and no convention could be.
     """
     coords = np.asarray(mol.atom_coords())
     natm = len(coords)
