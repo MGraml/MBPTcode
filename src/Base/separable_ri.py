@@ -800,6 +800,16 @@ def optimize_atomic_radii(element, basis, auxbasis, counts=None,
 _FRAME_DECAY = 3.0          # bohr; smooth neighbour weighting
 _FRAME_DEGEN = 1e-6         # relative eigenvalue gap below which a frame is flagged
 
+#: Reference directions that fix the SIGN of each frame axis. Three linearly
+#: independent generic directions (cyclic shifts of 1, 1/phi, 1/phi^2; circulant
+#: determinant 0.58), so no axis can be perpendicular to all three and the sign
+#: rule is total. Deliberately not axis-aligned: a Cartesian reference is
+#: perpendicular to the symmetry axes of exactly the molecules that need this.
+_FRAME_SIGN_REFS = np.array([[1.0, 0.6180339887498949, 0.38196601125010515],
+                             [0.38196601125010515, 1.0, 0.6180339887498949],
+                             [0.6180339887498949, 0.38196601125010515, 1.0]])
+_FRAME_SIGN_REFS /= np.linalg.norm(_FRAME_SIGN_REFS, axis=1)[:, None]
+
 
 def atomic_frames(mol, decay=_FRAME_DECAY, degeneracy_tol=_FRAME_DEGEN):
     """Per-atom orthonormal frames, covariant under a global rotation.
@@ -864,16 +874,22 @@ def atomic_frames(mol, decay=_FRAME_DECAY, degeneracy_tol=_FRAME_DEGEN):
             else:
                 axes = np.vstack([e_a, e_b, fixed])
 
+        # An axis SIGN is pure gauge: each Lebedev sub-shell is an orbit of the
+        # octahedral group, so negating an axis maps the shell onto itself and
+        # only permutes grid rows. It must therefore be DETERMINISTIC, not
+        # physical -- and an environment moment sum_j w_j (dhat_j . e_k)^3, with
+        # the first moment as fallback, is neither: both vanish identically for
+        # an axis with no neighbour projection (the out-of-plane axis of any
+        # planar environment), leaving eigh's sign, which no LAPACK build
+        # promises to reproduce.
+        # No convention is continuous everywhere -- equivariance at a symmetric
+        # geometry would force an axis to equal its own negative -- so generic
+        # references put the unavoidable jump on a generic set rather than on
+        # the symmetric configurations molecules actually sit at.
         for k in range(3):
-            proj = dj @ axes[k]
-            odd = float(np.sum(w * proj**3))        # covariant, sign-carrying
-            if abs(odd) > 1e-12:
-                if odd < 0:
-                    axes[k] = -axes[k]
-            else:                                   # symmetric along this axis
-                ref = float(np.sum(w * proj))
-                if ref < 0:
-                    axes[k] = -axes[k]
+            overlap = _FRAME_SIGN_REFS @ axes[k]
+            if overlap[int(np.argmax(np.abs(overlap)))] < 0:
+                axes[k] = -axes[k]
         if np.linalg.det(axes) < 0:                 # keep it a proper rotation
             axes[2] = -axes[2]
         frames[i] = axes
