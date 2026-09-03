@@ -139,24 +139,3 @@ def chi0_imaginary_frequency(X, D, eps, nocc, grid, mu=None, stream=True,
     return chi0
 
 
-def screening_space_time(X, D, eps, nocc, grid, mu=None):
-    """W(i.omega) = [I - chi0(i.omega)]^-1, via the imaginary-time route."""
-    chi0 = chi0_imaginary_frequency(X, D, eps, nocc, grid, mu=mu)
-    eye = np.eye(chi0.shape[-1])
-    return np.array([np.linalg.inv(eye - c) for c in chi0])
-
-
-def rpa_correlation_energy_space_time(X, D, eps, nocc, grid, mu=None):
-    """dRPA correlation energy E_c = (1/2pi) int dw Tr{log(1 - chi0) + chi0}.
-
-    The quadrature of `rpa_energy.rpa_correlation_energy_imaginary_axis`, with
-    chi0 from the imaginary-time route.
-    """
-    chi0 = chi0_imaginary_frequency(X, D, eps, nocc, grid, mu=mu)
-    eye = np.eye(chi0.shape[-1])
-    e_c = 0.0
-    for k, c in enumerate(chi0):
-        _, logdet = np.linalg.slogdet(eye - c)
-        e_c += grid.omega_weights[k] * (logdet + np.trace(c))
-    return e_c / (2.0 * np.pi)
-

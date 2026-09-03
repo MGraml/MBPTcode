@@ -153,17 +153,6 @@ def atomic_points(radii, centre=(0.0, 0.0, 0.0), origin=False):
     return np.vstack(out) + np.asarray(centre) if out else np.zeros((0, 3))
 
 
-def molecular_points(mol, radii_by_element, origin_by_element=None):
-    """Superposition of atomic grids -- no per-molecule grid search."""
-    coords = []
-    for ia in range(mol.natm):
-        sym = mol.atom_pure_symbol(ia)
-        use_origin = (origin_by_element or {}).get(sym, False)
-        coords.append(atomic_points(radii_by_element[sym], mol.atom_coord(ia),
-                                    origin=use_origin))
-    return np.vstack(coords)
-
-
 def published_grids():
     """The optimized atomic grids of Duchemin & Blase, JCP 150, 174120 (2019),
     supporting information Tables S8-S11.
@@ -893,7 +882,8 @@ def atomic_frames(mol, decay=_FRAME_DECAY, degeneracy_tol=_FRAME_DEGEN):
 
 def molecular_points_covariant(mol, radii_by_element, origin_by_element=None,
                                decay=_FRAME_DECAY, return_info=False):
-    """`molecular_points` with each atom's shells rotated into its local frame.
+    """The superposition of atomic grids, each atom's shells rotated into its
+    local frame.
 
     Same point count and same radii; only the shell ORIENTATIONS change, so the
     cost and the accuracy at a given grid size are unaffected -- what changes is

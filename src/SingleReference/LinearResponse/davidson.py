@@ -636,8 +636,8 @@ def isdf_block_action(lr_solver, nocc, lBSE, W_aux, isdf_factors,
     X_v = np.ascontiguousarray(X_mo[:, virt])
     npts, no = X_o.shape
 
-    # Zt = D W_aux D^T is `screened_interaction_imaginary_time`'s per-tau step,
-    # wanted once and statically here. W_aux = None is TDHF, where the exchange
+    # Zt = D W_aux D^T, the per-tau step of the space-time screening, wanted
+    # once and statically here. W_aux = None is TDHF, where the exchange
     # kernel is the bare Coulomb, i.e. Zt = Z = D D^T.
     if lBSE:
         if W_aux is not None:

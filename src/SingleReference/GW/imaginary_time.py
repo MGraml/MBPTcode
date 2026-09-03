@@ -161,13 +161,6 @@ def _transform_screened(Ctw, W_omega, chunk_bytes=2 << 30):
         del blk
     return out
 
-def screened_interaction_imaginary_time(W_omega, grid):
-    """
-    Wt(i.tau) = cosine transform of the correlation part W(i.omega) - I.
-    """
-    return _transform_screened(grid.cosft_tw, W_omega)
-
-
 def screened_interaction_tau_blocked(X, D, eps, nocc, grid, Ctw, mu=None,
                                      freq_block=None, scratch_dir=None,
                                      tile_memory_gb=4.0, wt_scratch=None,
@@ -355,8 +348,7 @@ def self_energy_matrix_imaginary_time(X_ao, D, W_omega, mo_coeff, eps, nocc,
     down with one of
 
         sigma_ao_to_mo           full MO matrix     -> qsGW, scGW
-        sigma_ao_to_mo_diagonal  MO diagonal        -> evGW
-        sigma_ao_to_mo_element   one MO element     -> G0W0
+        sigma_ao_to_mo_diagonal  MO diagonal        -> evGW, G0W0
 
     and discard, or loop over frequency blocks, if that does not fit.
     """
@@ -477,12 +469,3 @@ def sigma_ao_to_mo_diagonal(sigma_ao, mo_coeff, states=None):
     return np.einsum('mp,wmn,np->wp', C, sigma_ao, C, optimize=True)
 
 
-def sigma_ao_to_mo_element(sigma_ao, mo_coeff, p, q=None):
-    """A single MO element Sigma_pq, (nfreq,) -- what G0W0 needs (q = p).
-
-    Named for both bases like its siblings: the input is AO, the output is one
-    MO element. A bare `sigma_mo_element` would read as if it took MO input.
-    """
-    cp = mo_coeff[:, p]
-    cq = cp if q is None else mo_coeff[:, q]
-    return np.einsum('m,wmn,n->w', cp, sigma_ao, cq, optimize=True)

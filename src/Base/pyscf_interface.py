@@ -5,34 +5,6 @@ from pyscf import gto, scf, ao2mo
 
 from src.Base.solvent_screening import get_solvent_screening
 
-def get_one_electron_integrals(mol, mf, representation='spatial'):
-    h1_ao = mol.intor('int1e_kin') + mol.intor('int1e_nuc')
-    is_uhf = isinstance(mf, scf.uhf.UHF)
-    
-    if is_uhf:
-        mo_a, mo_b = mf.mo_coeff[0], mf.mo_coeff[1]
-        h1_mo_a = mo_a.T @ h1_ao @ mo_a
-        h1_mo_b = mo_b.T @ h1_ao @ mo_b
-        if representation == 'spin':
-            norb = h1_mo_a.shape[0]
-            h1_spin = np.zeros((2*norb, 2*norb))
-            h1_spin[0::2, 0::2] = h1_mo_a
-            h1_spin[1::2, 1::2] = h1_mo_b
-            return h1_spin
-        else:
-            return h1_mo_a, h1_mo_b
-    else:
-        mo = mf.mo_coeff
-        h1_mo = mo.T @ h1_ao @ mo
-        if representation == 'spin':
-            norb = h1_mo.shape[0]
-            h1_spin = np.zeros((2*norb, 2*norb))
-            h1_spin[0::2, 0::2] = h1_mo
-            h1_spin[1::2, 1::2] = h1_mo
-            return h1_spin
-        else:
-            return h1_mo
-
 def get_effective_one_electron_integrals(mol, mf, representation='spatial'):
     fock_ao = mf.get_fock()
     is_uhf = isinstance(mf, scf.uhf.UHF)
@@ -185,10 +157,6 @@ def get_two_electron_integrals_physicist(mol, mf, representation='spatial'):
 def convert_chemist_to_physicist(eri_chemist):
     # <pq|rs> = (pr|qs)
     return eri_chemist.transpose(0, 2, 1, 3)
-
-def convert_physicist_to_chemist(eri_phys):
-    # (pq|rs) = <pr|qs>
-    return eri_phys.transpose(0, 2, 1, 3)
 
 def get_antisymmetrized_integrals(eri_physicist):
     # <pq||rs> = <pq|rs> - <pq|sr>
@@ -679,41 +647,3 @@ class GProxy:
         return self._g_dense[key]
 
 # For backwards compatibility with other files
-def get_antisymmetrized_spin_integrals(h1_mo, eri_chemist):
-    norb = h1_mo.shape[0]
-    n_spin = 2 * norb
-    h1_spin = np.zeros((n_spin, n_spin))
-    h1_spin[0::2, 0::2] = h1_mo
-    h1_spin[1::2, 1::2] = h1_mo
-    g_anti_spin = get_antisymmetrized_spin_eri(eri_chemist)
-    return h1_spin, g_anti_spin
-
-def get_system_data(mol=None, mf=None, n_occ_spatial=0, n_act_spatial=2):
-    eps    = mf.mo_energy
-    norb   = len(eps)
-    n_virt_spatial = norb - n_occ_spatial - n_act_spatial
-    n_occ_spin = 2 * n_occ_spatial
-    n_act_spin = 2 * n_act_spatial
-    occ_idx  = np.arange(0, n_occ_spin, dtype=int)
-    act_idx  = np.arange(n_occ_spin, n_occ_spin + n_act_spin, dtype=int)
-    virt_idx = np.arange(n_occ_spin + n_act_spin, 2 * norb, dtype=int)
-    eri_chemist = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(norb,norb,norb,norb)
-    h1_ao = mol.intor('int1e_kin') + mol.intor('int1e_nuc')
-    h1_mo = mf.mo_coeff.T @ h1_ao @ mf.mo_coeff
-    h1_spin, g_anti_spin = get_antisymmetrized_spin_integrals(h1_mo, eri_chemist)
-    eps_spin = np.zeros(2 * norb)
-    eps_spin[0::2] = eps
-    eps_spin[1::2] = eps
-    return g_anti_spin, h1_spin, eps_spin, occ_idx, act_idx, virt_idx
-
-def get_system_data_spatial(mol=None, mf=None, n_occ_spatial=0, n_act_spatial=2):
-    eps    = mf.mo_energy
-    norb   = len(eps)
-    occ_idx  = np.arange(0, n_occ_spatial, dtype=int)
-    act_idx  = np.arange(n_occ_spatial, n_occ_spatial + n_act_spatial, dtype=int)
-    virt_idx = np.arange(n_occ_spatial + n_act_spatial, norb, dtype=int)
-    eri_chemist = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(norb,norb,norb,norb)
-    h1_ao = mol.intor('int1e_kin') + mol.intor('int1e_nuc')
-    h1_mo = mf.mo_coeff.T @ h1_ao @ mf.mo_coeff
-    eri_spatial_phys = eri_chemist.transpose(0, 2, 1, 3)
-    return eri_spatial_phys, h1_mo, eps, occ_idx, act_idx, virt_idx

@@ -220,97 +220,21 @@ DEFAULT_TAU_TARGET = 1e-10
 #: **1.3e-3 with [gap, e_max] against 5.0e-8 widened**. The 3.0 is the mirror
 #: argument for the tail.
 #:
-#: DO NOT UNIFY THIS WITH `matsubara.self_energy_range`. Three things in this
+#: DO NOT UNIFY THIS WITH `matsubara.self_energy_range`. Two things in this
 #: tree look like "the self-energy's range" and they answer different
 #: questions:
 #:
 #:   matsubara.self_energy_range          UNPADDED. Sizes a CONTINUATION --
 #:                                        Pade node count, the IR Lambda --
 #:                                        and wants the honest extent.
-#:   self_energy_fit_ranges_from_window   PADDED, below. Sizes a REMEZ
+#:   this pad, via `self_energy_fit_ranges`  PADDED. Sizes a REMEZ
 #:                                        LEAST-SQUARES FIT, which is why it
 #:                                        is widened at both ends.
-#:   the caller-side adapters             thin; they supply only the window
-#:                                        and mu, which is where the physics
-#:                                        differs.
 #:
-#: The first two share an unpadded core expression, which is precisely what
-#: makes them easy to "notice" as the same object and merge -- discarding the
-#: measurement above in the process.
+#: They share an unpadded core expression, which is precisely what makes them
+#: easy to "notice" as the same object and merge -- discarding the measurement
+#: above in the process.
 SELF_ENERGY_PAD = (0.3, 3.0)
-
-
-def self_energy_fit_ranges_from_window(eps, mu, w_lo, w_hi,
-                                       pad=SELF_ENERGY_PAD):
-    """((w_lo, w_hi), (sig_lo, sig_hi)) -- the two ranges, from one window.
-
-    THE CONVENTION, in one place. Every self-energy route constructs these
-    identically; what differs is only how each obtains the transition window
-    and the chemical potential -- here, an integer `nocc` and a midgap mu.
-    That difference is real physics and belongs with each caller. This is an
-    arbitrary agreement, and an arbitrary agreement duplicated across files is
-    one that drifts.
-
-    Sigma = -G Wt is a PRODUCT, so its decay rates are SUMS |eps - mu| + Omega
-    and reach beyond either factor's range -- hence rS is built from dG plus
-    the window rather than from the window alone, and fitting the Sigma
-    transform on rW is a silent accuracy loss rather than an error.
-    """
-    lo, hi = pad
-    dG = np.abs(np.asarray(eps) - mu)
-    return ((lo * w_lo, hi * w_hi),
-            (lo * (float(dG.min()) + w_lo), hi * (float(dG.max()) + w_hi)))
-
-
-def minimax_points_for_ranges(ratios, target=DEFAULT_TAU_TARGET,
-                              npoints_max=34):
-    """Smallest tabulated minimax grid resolving EVERY ratio; the widest binds.
-
-    A space-time route uses ONE point count for several transforms over
-    several ranges, so the worst of them sets it. R grows as the gap closes,
-    which is why a hardcoded ntau is wrong at one end of any size series --
-    and why one caller must not inherit another's value: the binding ratio may
-    be the self-energy's, measured 1.6x wider.
-
-    Returns (npoints, worst_error). `target` is NOT guaranteed: if nothing
-    tabulated reaches it, the best available is returned with the accuracy
-    actually obtained, and the caller is expected to look. Discarding that
-    second value is how a grid that quietly missed its target reads as a
-    converged answer.
-    """
-    npoints, worst = 0, 0.0
-    for R in ratios:
-        n, err = minimax_points_for_accuracy(1.0, R, target=target,
-                                             npoints_max=npoints_max)
-        if n is None:                  # nothing tabulated resolved this ratio
-            return npoints_max, float('inf')
-        npoints, worst = max(npoints, n), max(worst, err)
-    return npoints, worst
-
-
-def resolve_grid_size(value, ratios, target=DEFAULT_TAU_TARGET,
-                      npoints_max=34):
-    """An explicit point count, or resolve the 'auto'/None SENTINEL.
-
-    The space-time route carries sentinels -- `GW.space_time.DEFAULT_NTAU`
-    and `DEFAULT_NFREQ` -- and
-    a sentinel forwarded into a grid constructor produces garbage rather than
-    an error. Resolving them is therefore a shared concern and gets one
-    entry point.
-
-    Returns (npoints, worst_error), with worst_error None when an explicit
-    count was passed and nothing was measured.
-
-    NOT covered here, deliberately: a size defined by RELATION to another
-    grid rather than by accuracy -- `DEFAULT_NFREQ = 'auto'` resolves to the
-    already-resolved ntau. That is a one-line rule belonging to the caller
-    that knows both grids, and folding it in here would make this function
-    silently order-dependent.
-    """
-    if value is None or (isinstance(value, str) and value.lower() == 'auto'):
-        return minimax_points_for_ranges(ratios, target=target,
-                                         npoints_max=npoints_max)
-    return int(value), None
 
 
 def _psi_and_matrix(kind, tau, omega, i, x):
