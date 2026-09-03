@@ -53,10 +53,8 @@ with optimized atomic interpolation grids. It backs the space-time GW route,
 replaces the density-fitted `cderi` and so removes the three-index tensor from
 the memory budget.
 
-**BSE** — an upfolded Bethe-Salpeter Hamiltonian following Bintrim and
-Berkelbach, [J. Chem. Phys. 156, 044114 (2022)](https://doi.org/10.1063/5.0074434),
-solving the dynamical problem without a frequency grid, plus the iterative
-(Davidson) BSE on ISDF factors.
+**BSE** — the iterative (Davidson) Bethe-Salpeter equation on ISDF factors,
+sharing one factorization with the GW that feeds it.
 
 **Solvent** — polarizable-continuum screening in the style of Duchemin,
 Jacquemin and Blase, [J. Chem. Phys. 144, 164106 (2016)](https://doi.org/10.1063/1.4946778):
@@ -115,7 +113,6 @@ src/Base/               PySCF interface, constants, linear algebra
     utils/matsubara.py  finite-temperature (IR) grids
 src/SingleReference/
     ADC/                the ADC solvers (see ADC/__init__.py for the map)
-    BSE/                upfolded Bethe-Salpeter Hamiltonian
     CC/                 CCSD/CCSDT amplitudes, lambda, EOM
     DensityMatrix/      MPn / GW / CC correlated 1-RDMs
     EpsteinNesbet/      EN denominators and shifts

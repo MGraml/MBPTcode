@@ -23,7 +23,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 CORE = ['src/Base', 'src/Solvers', 'src/SingleReference/GW',
-        'src/SingleReference/BSE', 'src/SingleReference/LinearResponse']
+        'src/SingleReference/LinearResponse']
 SKIP = {'__pycache__', 'data'}
 
 
