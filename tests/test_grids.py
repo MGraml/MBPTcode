@@ -60,3 +60,4 @@ if __name__ == '__main__':
     print(f"minimax_frequency_grid linear rescaling with e_min: {'OK' if ok else 'FAIL'}")
 
     print("\nALL PASSED" if all_ok else "\nFAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

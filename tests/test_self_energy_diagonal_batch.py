@@ -44,3 +44,4 @@ if __name__ == '__main__':
     ok = diff < 1e-12
     print(f"calculate_self_energy_diagonal_batch vs calculate_self_energy: maxdiff={diff:.2e}  {'OK' if ok else 'FAIL'}")
     print("\nALL PASSED" if ok else "\nFAILURES DETECTED")
+    sys.exit(0 if ok else 1)

@@ -290,3 +290,4 @@ if __name__ == '__main__':
           f"(N={n_uhf:.8f}, expect {mol_uhf.nelectron}): {'OK' if ok else 'FAIL'}")
 
     print("ALL PASSED" if all_ok else "FAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

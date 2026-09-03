@@ -38,3 +38,4 @@ if __name__ == '__main__':
     print(f"'PSD3' absent from KNOWN_VERTEX_MODES: {'OK' if ok else 'FAIL'}")
 
     print("\nALL PASSED" if all_ok else "\nFAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

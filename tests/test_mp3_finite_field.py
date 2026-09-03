@@ -127,3 +127,4 @@ if __name__ == '__main__':
           f"h={h2:.0e}: {mu_mp3_numeric_h2:.8f}, diff={diff_h:.2e}): {'OK' if ok else 'FAIL'}")
 
     print("ALL PASSED" if all_ok else "FAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

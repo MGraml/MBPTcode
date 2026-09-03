@@ -89,3 +89,4 @@ if __name__ == '__main__':
                 print(f"  [{sp_name}/{method_label}] GW-linearized == GW-relaxed (CPHF had no effect): FAIL")
 
     print("\nALL PASSED" if all_ok else "\nFAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

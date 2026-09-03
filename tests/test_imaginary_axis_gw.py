@@ -55,3 +55,4 @@ if __name__ == '__main__':
         print(f"{label:22s} nfreq={nfreq:3d}: AC={qp_ac:.6f} eV  analytic={qp_analytic:.6f} eV  diff={diff_mev:+.3f} meV  {'OK' if ok else 'FAIL'}")
 
     print("\nALL PASSED" if all_ok else "\nFAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

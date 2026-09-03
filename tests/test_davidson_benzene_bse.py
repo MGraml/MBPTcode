@@ -71,3 +71,5 @@ if __name__ == '__main__':
     print(f"davidson+orbsym (t={t_dav_sym:8.2f}s): {omega_dav_sym}")
     print(f"maxdiff={diff:.2e}  {'OK' if ok else 'FAIL'}   "
           f"maxdiff(orbsym)={diff_sym:.2e}  {'OK' if ok_sym else 'FAIL'}")
+    print("\nALL PASSED" if ok and ok_sym else "\nFAILURES DETECTED")
+    sys.exit(0 if ok and ok_sym else 1)

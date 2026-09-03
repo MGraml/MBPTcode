@@ -69,3 +69,4 @@ if __name__ == '__main__':
               f"Unrestricted-oracle Laplace(ntau=8) (max diff={diff3_lap:.2e}): {'OK' if ok3_lap else 'FAIL'}")
 
     print("ALL PASSED" if all_ok else "FAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

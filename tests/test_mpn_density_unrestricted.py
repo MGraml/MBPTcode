@@ -96,3 +96,4 @@ if __name__ == '__main__':
                 print(f"    {n}: {np.max(np.abs(g - r)):.2e}")
 
     print("ALL PASSED" if all_ok else "FAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

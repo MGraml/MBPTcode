@@ -75,3 +75,4 @@ if __name__ == '__main__':
         all_ok &= check(f'BSE spin-flip ({channel})', omega)
 
     print("\nALL PASSED" if all_ok else "\nFAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

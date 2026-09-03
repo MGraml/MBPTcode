@@ -50,3 +50,4 @@ if __name__ == '__main__':
           f"(full={qp_full:.6f} eV, df={qp_df:.6f} eV, diff={(qp_full-qp_df)*1000:.2f} meV)")
 
     print("\nALL PASSED" if all_ok else "\nFAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)

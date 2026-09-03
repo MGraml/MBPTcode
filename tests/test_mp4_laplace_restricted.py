@@ -40,3 +40,4 @@ if __name__ == '__main__':
         print(f"{basis:8s} {atom:35s}: MP4 Laplace(ntau=8) vs exact (max diff={diff:.2e}): {'OK' if ok else 'FAIL'}")
 
     print("ALL PASSED" if all_ok else "FAILURES DETECTED")
+    sys.exit(0 if all_ok else 1)
