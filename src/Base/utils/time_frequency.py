@@ -212,28 +212,16 @@ DEFAULT_TAU_TARGET = 1e-10
 
 #: Padding on the two self-energy fit ranges, as (below, above).
 #:
-#: WHAT THE 0.3 BUYS, because it reads as a fudge factor and is not: the
-#: screened interaction carries spectral weight BELOW the smallest
-#: independent-particle transition -- collective excitations sit under the gap
-#: -- so a range starting at the gap misfits exactly where Wt is largest.
-#: Measured on the Wt(i.w) -> tau -> Wt(i.w) round trip at ntau = 18:
-#: **1.3e-3 with [gap, e_max] against 5.0e-8 widened**. The 3.0 is the mirror
-#: argument for the tail.
+#: The 0.3 is not a fudge factor. The screened interaction has weight BELOW the
+#: smallest transition -- collective excitations sit under the gap -- so a range
+#: starting at the gap misfits where it is largest. Measured on the round trip
+#: at ntau = 18: 1.3e-3 unpadded, 5.0e-8 widened. The 3.0 mirrors it for the
+#: tail.
 #:
-#: DO NOT UNIFY THIS WITH `matsubara.self_energy_range`. Two things in this
-#: tree look like "the self-energy's range" and they answer different
-#: questions:
-#:
-#:   matsubara.self_energy_range          UNPADDED. Sizes a CONTINUATION --
-#:                                        Pade node count, the IR Lambda --
-#:                                        and wants the honest extent.
-#:   this pad, via `self_energy_fit_ranges`  PADDED. Sizes a REMEZ
-#:                                        LEAST-SQUARES FIT, which is why it
-#:                                        is widened at both ends.
-#:
-#: They share an unpadded core expression, which is precisely what makes them
-#: easy to "notice" as the same object and merge -- discarding the measurement
-#: above in the process.
+#: DO NOT MERGE THIS WITH `matsubara.self_energy_range`. That one is unpadded on
+#: purpose: it sizes an analytic continuation, which wants the honest extent,
+#: where this sizes a least-squares fit, which needs room at both ends. They
+#: share a core expression, which is what makes them look mergeable.
 SELF_ENERGY_PAD = (0.3, 3.0)
 
 

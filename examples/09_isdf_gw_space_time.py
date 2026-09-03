@@ -1,21 +1,17 @@
 """Cubic-scaling GW and BSE on one ISDF factorization.
 
-The route for a large molecule: the SCF, the GW self-energy and the BSE all run
-on the SAME separable (ISDF) factors. Reusing them is not just cheaper -- a
-second fit lands in a different auxiliary gauge, which stays self-consistent and
-silently moves the spectrum.
+The route for a large molecule: the SCF, the GW and the BSE all run on the SAME
+factors. Reusing them is not only cheaper -- a second fit comes back in a
+different gauge, and mixing gauges gives a wrong answer that still converges.
 
-`solve_bse_isdf` takes the two independently:
+Two arguments of `solve_bse_isdf` are easy to confuse:
 
-    factors=  the ISDF fit ONLY. Omit it and one is built; it says nothing
-              about whether a GW has been run.
-    qp=       what goes on the BSE diagonal. 'G0W0' (the default) runs the GW
-              itself, an ARRAY of per-orbital energies uses yours, False gives
-              BSE@mean-field.
+    factors=  the ISDF fit ONLY. Says nothing about whether a GW has run.
+    qp=       the BSE diagonal. 'G0W0' (default) runs the GW itself; an array
+              of orbital energies uses yours; False gives BSE@mean-field.
 
-The screened interaction is never passed: W is always built internally at the
-MEAN-FIELD energies, which is what the G0W0-BSE split means. When the GW runs
-inside, W is reused from its frequency axis; supply `qp=` and it is rebuilt.
+W is never passed: it is always built at the mean-field energies, which is what
+G0W0-BSE means.
 
     python examples/09_isdf_gw_space_time.py
 """
@@ -50,9 +46,8 @@ qp = solve_qp_energy_space_time(mf, mol, nocc, [nocc - 2, nocc - 1],
 print('G0W0       HOMO-1, HOMO = '
       + ', '.join(f'{e * HARTREE_TO_EV:.3f}' for e in qp) + ' eV')
 
-# 4a. BSE in two steps: the whole QP diagonal, then the BSE on it. The diagonal
-#     needs every orbital, so ask for it explicitly and pass it as qp=.
-eps_qp, _ = solve_qp_diagonal_space_time(mf, mol, nocc, factors=factors)
+# 4a. BSE in two steps: the QP diagonal first, then the BSE on it.
+eps_qp, _ = solve_qp_diagonal_space_time(mf, mol, nocc, factors=factors)  # every orbital
 omega, X, Y, info = solve_bse_isdf(mf, mol, nocc, nroots=3, qp=eps_qp,
                                    factors=factors)
 print('BSE@G0W0   ' + ', '.join(f'{w * HARTREE_TO_EV:.3f}' for w in omega) + ' eV')

@@ -1,33 +1,24 @@
-"""The exactness claims of the blocked, screened AO self-energy.
+"""What must not move the blocked, screened AO self-energy.
 
-`self_energy_matrix_imaginary_time` holds (M, M) intermediates. Unblocked that
-is 159 GB at the 476-atom hexamer/cc-pVDZ, which the OOM killer ended. Blocking
-the interpolation index is a pure regrouping of a sum and must not move the
-answer; the geometric screen drops only block pairs whose bounding spheres are
-further apart than the cutoff, and on separated fragments must not move it
-either. X_ao is carried from the fit rather than inverted out of X_mo, which
-has to agree wherever the inversion is legal.
+`self_energy_matrix_imaginary_time` holds (M, M) intermediates -- 159 GB at the
+476-atom hexamer, which the OOM killer ended -- so it blocks the interpolation
+index and skips block pairs too far apart to matter. Neither is an
+approximation: blocking only regroups a sum, and the screen drops pairs whose
+contribution is bounded below the tolerance. Checks 1-4 say the answer is
+unchanged.
 
-Checks 2-4 compare the kernel against ITSELF under a regrouping, so a defect
-sitting on both sides survives all of them. Check 5 is the one that does not:
-`self_energy_imaginary_time` is the same physics written in four lines -- no
-blocking, no Morton order, no screening, no tau streaming -- and the optimized
-kernel has to reproduce it. It stops in the time domain and works in the basis
-its collocation is in, so the comparison applies the tau -> omega
-recombination by hand and rotates the production result AO -> MO.
+They say it by comparing the kernel with ITSELF, though, so a defect sitting on
+both sides survives them. Check 5 cannot be fooled that way:
+`self_energy_imaginary_time` is the same physics in four lines, with none of
+the machinery, and the optimized kernel has to reproduce it.
 
-Checks 6 and 7 are structural: Sigma is symmetric in its two AO indices, and
-Sigma(mu - i.w) is the conjugate of Sigma(mu + i.w). Note that 7 is weak --
-it holds whenever the fitted cosine weights are even in omega and the sine
-weights odd, which is a property of the transform rather than of the
-self-energy assembly, and it comes out at exactly zero.
+Checks 6 and 7 are structural. 7 is weak -- it follows from the transform's
+parity alone, and comes out at exactly zero.
 
-Check 8 covers the low-memory branch (`freq_block`, `scratch_dir`) THROUGH the
-driver. Nothing in src/ sets either, so it is only entered when a caller opts
-in -- and it shipped with three of its arguments unbound, which byte-compiles
-and raises NameError the moment the branch runs. Checks 2-3 reach the blocked
-kernel directly and check 4 calls the driver in core, so every one of them
-passed while the branch a large run actually takes was broken.
+Check 8 drives the low-memory branch (`freq_block`, `scratch_dir`). Nothing in
+src/ sets either, so only an explicit caller reaches it, and it once shipped
+with three arguments unbound: every check above passed while the branch a large
+run actually takes was broken.
 """
 import os
 import shutil
@@ -152,39 +143,29 @@ if __name__ == '__main__':
     print(f'4. driver passes screen_r_cut through: HOMO {base:.6f} vs {scr:.6f} eV'
           f'  d={abs(base - scr) * 1e3:.5f} meV  {"OK" if ok4 else "FAIL"}')
 
-    # 5. The whole blocked, streamed, Morton-ordered kernel against the four-line
-    #    statement of the same physics: Zt = D Wt D^T, Hadamard against G^{<,>},
-    #    contract with the collocation. `self_energy_imaginary_time` is that
-    #    form. It stops in the time domain and works in whatever basis X is in,
-    #    so the comparison applies the tau -> omega recombination by hand and
-    #    rotates the production result AO -> MO. Checks 2 and 3 only compare the
-    #    kernel against ITSELF under a regrouping; a sign or an index error
-    #    common to both sides survives them and dies here.
-    Ctw, _ = minimax_transform_weights(COSINE_WT, tau, om, *rW)
+    # 5. Against the plain four-line form of the same physics (module docstring).
+    Ctw, _ = minimax_transform_weights(COSINE_WT, tau, om, *rW)   # W(i.w) -> W(i.tau)
     sig_l, sig_g = self_energy_imaginary_time(X_mo, D, _transform_screened(Ctw, W),
                                               eps, nocc, tau, mu=mu)
+    # it stops in imaginary time, so finish the transform here
     Cs, _ = minimax_transform_weights(COSINE_TW, tau, out, *rS)
     Ss, _ = minimax_transform_weights(SINE_TW, tau, out, *rS)
     naive = -0.5 * (np.tensordot(Cs, sig_g + sig_l, axes=(1, 0))
                     + 1j * np.tensordot(Ss, sig_g - sig_l, axes=(1, 0)))
+    # and it answers in X's basis, so bring the production result to the MOs
     rel = np.max(np.abs(sigma_ao_to_mo(ref, mf.mo_coeff) - naive)) / np.max(np.abs(naive))
     ok5 = rel < 1e-12
     all_ok &= ok5
     print(f'5. production kernel == naive reference form: rel={rel:.2e}  '
           f'{"OK" if ok5 else "FAIL"}')
 
-    # 6. Sigma_mu,nu = Sigma_nu,mu. Structural rather than grid-limited: Zt and
-    #    Ghat are both symmetric and the outer contraction uses the same X on
-    #    both sides. A transposed operand would leave checks 2 and 3 untouched,
-    #    since it would sit on both sides of those comparisons.
+    # 6. Both factors are symmetric and both outer indices use the same X.
     d_sym = np.max(np.abs(ref - ref.transpose(0, 2, 1))) / np.max(np.abs(ref))
     ok6 = d_sym < 1e-13
     all_ok &= ok6
     print(f'6. mu<->nu symmetry: rel={d_sym:.2e}  {"OK" if ok6 else "FAIL"}')
 
-    # 7. Sigma(mu - i.w) = conj Sigma(mu + i.w). A caller can take the occupied
-    #    half of the axis by conjugation instead of running a second tau sweep,
-    #    so the symmetry is pinned here rather than left implicit there.
+    # 7. Lets a caller conjugate for the occupied half instead of sweeping twice.
     neg = self_energy_matrix_imaginary_time(X_ao, D, W, mf.mo_coeff, eps, nocc,
                                             tau, om, -out, mu=mu,
                                             block_memory_gb=1e6)
@@ -194,14 +175,7 @@ if __name__ == '__main__':
     print(f'7. Sigma(-i.w) == conj Sigma(+i.w): rel={d_conj:.2e}  '
           f'{"OK" if ok7 else "FAIL"}')
 
-    # 8. The LOW-MEMORY branch, through the driver. Check 4 calls the driver but
-    #    with neither freq_block nor scratch_dir, so it only ever exercised the
-    #    in-core path; checks 2 and 3 reach the blocked KERNEL directly, which
-    #    made the file read as though blocking were covered. Nothing in src/
-    #    sets either kwarg, so this branch is only entered when a caller opts in
-    #    -- which is exactly when the system is large enough that failing costs
-    #    hours of fitting first. It is not a large-system path in any other
-    #    sense: no size threshold gates it, so it reproduces here in seconds.
+    # 8. The driver's low-memory branch, which nothing else here reaches.
     print('8. low-memory branch through the driver:')
     ok8 = True
     scratch = tempfile.mkdtemp(prefix='st_blocked_')

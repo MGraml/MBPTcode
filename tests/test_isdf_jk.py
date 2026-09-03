@@ -163,13 +163,9 @@ def main():
     dh = (tst.mo_energy[nocc - 1] - ref.mo_energy[nocc - 1]) * HARTREE_TO_EV * 1e3
     ok &= check(abs(dh) < 50.0, 'HOMO within 50 meV', 'd = %+.1f meV' % dh)
 
-    # The bridge a GW/BSE on top of an ISDF SCF goes through. Its whole claim is
-    # that ISDFJK.build and space_time.separable_factors construct the SAME
-    # factorization, so the second build can be skipped -- and, the part that
-    # does not announce itself, that the factors come back in the SAME auxiliary
-    # gauge. Pairing factors from one fit with a W from another stays
-    # self-consistent and moves the spectrum, so an equality is the only check
-    # that catches it; a tolerance on the energy would not.
+    # A GW/BSE on top of an ISDF SCF reuses the SCF's fit through this. It has
+    # to hand back the SAME factors, in the SAME gauge -- mixing two fits gives
+    # a wrong answer that still looks converged, so only an equality catches it.
     print('\n=== separable_factors_from_jk: the SCF fit, reused ===')
     sf = isdf_jk(scf.RHF(mol), auxbasis='cc-pvdz-ri')
     sf.conv_tol = 1e-10
@@ -183,9 +179,8 @@ def main():
                 '%.1e' % np.abs(Xao_jk - Xao_st).max())
     ok &= check(np.abs(Xmo_jk - Xmo_st).max() < 1e-12, 'same MO collocation',
                 '%.1e' % np.abs(Xmo_jk - Xmo_st).max())
-    # D itself, not just Z = D D^T: an orthogonal rotation of the aux index
-    # leaves Z invariant, which is exactly the gauge difference that survives
-    # every ERI check and still corrupts a mixed-fit W.
+    # D itself, not Z = D D^T: rotating the aux index leaves Z alone, so a
+    # check on Z (or on any ERI) sees nothing while the gauge has changed.
     dD = np.abs(D_jk - D_st).max()
     dZ = np.abs(D_jk @ D_jk.T - D_st @ D_st.T).max()
     ok &= check(dD < 1e-12, 'same auxiliary GAUGE (D, not merely Z)',
