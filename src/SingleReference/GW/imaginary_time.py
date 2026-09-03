@@ -211,7 +211,7 @@ def screened_interaction_tau_blocked(X, D, eps, nocc, grid, Ctw, mu=None,
     quadrature must contribute nothing to it.
 
     Returns Wt(i.tau) with shape (Ctw.shape[0], naux, naux), matching what
-    `self_energy_frequency_from_time` builds internally.
+    `self_energy_matrix_imaginary_time` builds internally when Wt_tau is None.
     """
     occ, virt = get_occ_virt_indices(eps, nocc)
     if mu is None:
@@ -285,71 +285,6 @@ def screened_interaction_tau_blocked(X, D, eps, nocc, grid, Ctw, mu=None,
     return Wt
 
 
-def self_energy_frequency_from_time(X, D, W_omega, eps, nocc, tau_points,
-                                    omega_in, omega_out, p_state, mu=None,
-                                    ranges=None, tau_indices=None,
-                                    Wt_tau=None):
-    """
-    Sigma^c_pp(i.omega) by the full space-time route
-    tau kept through the
-    self-energy, with a second Fourier transform back.
-
-        Wt(i.omega) --cos--> Wt(i.tau)                    (even)
-        Zt_PQ(tau)  = D Wt(tau) D^T
-        Sigma^{<,>}_pq(tau) = sum_PQ X[P,p] (Zt * Ghat^{<,>})_PQ X[Q,q]
-        Sigma(i.omega) = cos[Sigma^> + Sigma^<] + i sin[Sigma^> - Sigma^<]
-
-    the last line being Foerster and Visscher eq 54 (JCTC 2020, 16, 7381),
-    which follows from splitting
-
-        Sigma(i.omega) = int_0^inf dtau [ e^{i omega tau} Sigma^>(tau)
-                                        + e^{-i omega tau} Sigma^<(tau) ]
-
-    into its even and odd parts. Both transform matrices are fitted to
-    2 int_0^inf dtau cos/sin(omega tau) e^{-x tau}, i.e. they carry a factor 2
-    relative to the bare half-line integral, hence the 1/2 below.
-
-    See also from the Kresse group:
-    Liu et al. PRB, 94, 165109 (2016)
-    """
-    occ, virt = get_occ_virt_indices(eps, nocc)
-    if mu is None:
-        mu = 0.5 * (eps[occ].max() + eps[virt].min())
-    rW, rS = ranges or self_energy_fit_ranges(eps, nocc, mu=mu)
-
-    if Wt_tau is None:
-        Ctw, _ = minimax_transform_weights(COSINE_WT, tau_points, omega_in, *rW)
-        Wt_tau = _transform_screened(Ctw, W_omega)
-    # else the caller built it blockwise and W_omega was never formed at all
-
-    ntau = len(tau_points)
-    # zeros, not empty: with tau_indices set only the owned entries are filled
-    # and the rest must contribute nothing to the transform, which is a sum.
-    states = np.atleast_1d(p_state)
-    scalar = np.ndim(p_state) == 0
-    sig_l = np.zeros((ntau, len(states)))
-    sig_g = np.zeros((ntau, len(states)))
-    Xp = np.ascontiguousarray(X[:, states])            # (M, nstates)
-    X_o, X_v = X[:, occ], X[:, virt]
-    e_o, e_v = eps[occ] - mu, eps[virt] - mu
-    which = range(ntau) if tau_indices is None else np.atleast_1d(tau_indices)
-    for k in which:
-        tau = tau_points[k]
-        G_l = (X_o * np.exp(e_o * tau)) @ X_o.T
-        G_g = -(X_v * np.exp(-e_v * tau)) @ X_v.T
-        Zt = D @ Wt_tau[k] @ D.T
-        G_l *= Zt                                       # in place; Zt kept
-        sig_l[k] = np.einsum('Pp,Pp->p', Xp, G_l @ Xp)
-        G_g *= Zt
-        sig_g[k] = np.einsum('Pp,Pp->p', Xp, G_g @ Xp)
-        del Zt
-
-    C, _ = minimax_transform_weights(COSINE_TW, tau_points, omega_out, *rS)
-    S, _ = minimax_transform_weights(SINE_TW, tau_points, omega_out, *rS)
-    out = -0.5 * ((sig_g + sig_l).T @ C.T + 1j * ((sig_g - sig_l).T @ S.T))
-    return out[0] if scalar else out
-
-
 def _morton_order(coords):
     """Z-order interpolation points so a contiguous block is spatially compact.
 
@@ -377,9 +312,8 @@ def self_energy_matrix_imaginary_time(X_ao, D, W_omega, mo_coeff, eps, nocc,
                                       coords=None, screen_r_cut=None):
     """Full Sigma^c_{mu nu}(i.omega) in the AO basis, shape (nfreq, nao, nao).
 
-    The matrix counterpart of `self_energy_frequency_from_time`, which returns
-    only one MO-diagonal element. Same chain and the same two fitted ranges;
-    what changes is that the outer contraction keeps both AO indices:
+    The whole chain in one call, with the outer contraction keeping both AO
+    indices:
 
         Sigma_{mu nu}(tau) = sum_PQ X_ao[P,mu] (Zt_PQ * Ghat_PQ) X_ao[Q,nu]
 
@@ -397,8 +331,7 @@ def self_energy_matrix_imaginary_time(X_ao, D, W_omega, mo_coeff, eps, nocc,
     Wt_tau: the screened interaction already on the time grid. Pass it when the
     caller built W blockwise (`screened_interaction_tau_blocked`) and W_omega --
     (nfreq, naux, naux), the largest array on this route -- was never formed at
-    all; W_omega is then ignored. The peer parameter on
-    `self_energy_frequency_from_time`, so the low-memory sweep serves both.
+    all; W_omega is then ignored.
 
     block_memory_gb caps the per-block working set. It does not change the
     answer or the flop count, only the peak allocation.
