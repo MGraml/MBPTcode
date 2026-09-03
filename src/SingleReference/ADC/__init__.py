@@ -14,7 +14,6 @@
     adc_u_dense_df.py      spin-orbital dense supermatrix, B_spin
     adc_u_sigma_full.py    spin-orbital matrix-free operator, dense g
     adc_u_sigma_df.py      spin-orbital matrix-free operator, g-free B_spin
-    adc_spinblocked.py     spin-blocked variant
     spin_adapt.py          CSF isometry and adapter
     static_correction.py   Sigma(infinity) builders + build_static_correction
     solve.py               Davidson/dense solvers, seeds, Lanczos spectral

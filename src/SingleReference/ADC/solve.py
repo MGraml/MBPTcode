@@ -1,7 +1,6 @@
 """Solver machinery shared by every ADC route: root-following Davidson,
-dense diagonalization, the mid-level solve_davidson convenience, the
-downfolded/satellite seed builders, and the Lanczos/continued-fraction
-spectral solver."""
+dense diagonalization, the downfolded/satellite seed builders, and the
+Lanczos/continued-fraction spectral solver."""
 import numpy as np
 from pyscf import lib as pyscf_lib
 
@@ -180,25 +179,6 @@ def diag_dense(H, norb, threshold=5000):
     return eGF[order], Z[order], Reigv[:, order]
 
 
-def solve_davidson(solver, nocc, homo_index, static_correction=None,
-                   ref_vec=None, nroots=1, conv_tol=1e-6, max_cycle=100,
-                   max_space=30, verbose=0, t2_ijcd=None):
-    """Root-following Davidson on solver.build_matrix_free_operator (mid-level
-    convenience). t2_ijcd: spin-orbital EN-dressed T2^(1) hook. Returns
-    (eGF, Z, Reigv)."""
-    if t2_ijcd is not None:
-        aop, diag, dims = solver.build_matrix_free_operator(
-            nocc, static_correction=static_correction, t2_ijcd=t2_ijcd)
-    else:
-        aop, diag, dims = solver.build_matrix_free_operator(
-            nocc, static_correction=static_correction)
-    return davidson_follow(aop, diag, dims['nH'], solver.norb, homo_index,
-                           ref_vec, nroots, conv_tol=conv_tol,
-                           max_cycle=max_cycle, max_space=max_space,
-                           verbose=verbose)
-
-
-
 # ---- Lanczos/continued-fraction spectral solver ----
 class _LanczosState:
     """Incremental Lanczos state so lanczos_spectral can extend the
@@ -222,7 +202,6 @@ class _LanczosState:
         a = np.asarray(self.a, float)
         b = np.concatenate([[0.0], np.asarray(self.b, float)])
         return a, b
-
 
 
 def _lanczos_extend(matvec, state, nsteps, reorth=True):
@@ -260,7 +239,6 @@ def _continued_fraction(omega, a, b, eta):
     for k in range(n - 2, -1, -1):
         cf = 1.0 / (z - a[k] - b[k + 1] ** 2 * cf)
     return cf
-
 
 
 def lanczos_spectral(A, diag, v0, omega_range, eta=None, npts=2000,
