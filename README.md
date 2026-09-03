@@ -68,10 +68,20 @@ gap) are undefined.
 
 ## Install
 
-Requires Python 3.10+, NumPy, SciPy and PySCF:
+Requires Python 3.10+, NumPy, SciPy, PySCF and opt_einsum:
 
 ```bash
-pip install numpy scipy pyscf
+pip install numpy scipy pyscf opt_einsum
+```
+
+`opt_einsum` is imported at module load by `CC/cached_einsum.py`, which most of
+the tree pulls in, so it is not optional.
+
+The coupled-cluster integral path additionally needs `openfermion` and
+`openfermionpyscf`, imported only when they are reached:
+
+```bash
+pip install openfermion openfermionpyscf
 ```
 
 There is no build step. Run from the repository root so that `src` is
