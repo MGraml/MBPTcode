@@ -3,6 +3,13 @@
 Density matrices from here (compute_gw_density_matrix) and from
 src/SingleReference/CC (compute_ccsd/ccsdt_density_matrix) are both AO-basis
 1-RDMs, usable interchangeably as calc_qp_energy(..., dm_correction=...).
+
+Three routes reach the same quasiparticle energy and differ only in cost:
+calc_qp_energy solves the Casida problem explicitly (O(N^6)),
+solve_qp_energy_imaginary_axis integrates the self-energy on an imaginary
+frequency grid (O(N^4)), and solve_qp_energy_space_time forms it as a
+pointwise product in imaginary time on a separable (ISDF) factorization of
+the ERIs (O(N^3)).
 """
 from src.SingleReference.base import get_occ_virt_indices
 from src.SingleReference.GW.transition_amplitudes import AmplitudeGenerator
@@ -20,7 +27,9 @@ from src.SingleReference.DensityMatrix.density_matrix import (GWDensityMatrixSol
                                                  compute_mp3_density_matrix)
 from src.SingleReference.GW.imaginary_axis import (
     solve_screening_imaginary_axis, self_energy_imaginary_axis,
-    self_energy_matrix_imaginary_axis, solve_qp_energy_imaginary_axis)
+    solve_qp_energy_imaginary_axis)
+from src.SingleReference.GW.space_time import (solve_qp_energy_space_time,
+                                               separable_factors)
 from src.SingleReference.LinearResponse.rpa_energy import (
     rpa_correlation_energy_casida, rpa_correlation_energy_imaginary_axis)
 from src.SingleReference.ADC import (

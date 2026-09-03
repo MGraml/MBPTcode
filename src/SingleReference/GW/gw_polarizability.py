@@ -15,42 +15,19 @@ Spin-orbital, full-ERI. EOM-CCSDT (or CCSD) via eom.py's generated
 sigma-vector Davidson solver -- scales far better than exact determinant
 enumeration, though still full-ERI/no-symmetry so realistically small-to-
 medium systems only. Validated against the paper's Table 1 (H2/He, def2-SVP)
-by tests/test_gw_cc_polarizability.py.
+by tests/test_gw_polarizability.py.
+
+Reached from the usual front end as
+calc_qp_energy(mf, selfenergy='GW', polarizability='ccsdt', state=...); this
+module is the physics object behind that branch, the CC analog of
+self_energy.py's SelfEnergySolver.
 """
 import numpy as np
 
 from src.Base.constants import DEFAULT_BROADENING_ETA
+from src.Base.pyscf_interface import get_two_electron_integrals_chemist
 from src.Solvers.qp_equation import solve_qp_equation
 from src.SingleReference.CC.eom import EOMCC
-
-HARTREE_TO_EV = 27.2114
-
-
-def dipole_integrals_so(mf):
-    """(3, nso, nso) electric-dipole (position) integrals in the interleaved
-    spin-orbital MO basis, for EOMResult.polarizability()."""
-    dip_ao = mf.mol.intor('int1e_r')
-    C = mf.mo_coeff
-    dip_mo = np.einsum('xuv,up,vq->xpq', dip_ao, C, C, optimize=True)
-    n = 2 * C.shape[1]
-    dip_so = np.zeros((3, n, n))
-    dip_so[:, 0::2, 0::2] = dip_mo
-    dip_so[:, 1::2, 1::2] = dip_mo
-    return dip_so
-
-
-def spin_orbital_chemist_eri(mf):
-    """(pq|rs) in the interleaved spin-orbital MO basis (chemist notation,
-    same orbital ordering as integrals.py)."""
-    from pyscf import ao2mo
-    nmo = mf.mo_coeff.shape[1]
-    eri = ao2mo.restore(1, ao2mo.kernel(mf.mol, mf.mo_coeff), nmo)
-    n = 2 * nmo
-    eri_so = np.zeros((n, n, n, n))
-    for s1 in (0, 1):
-        for s2 in (0, 1):
-            eri_so[s1::2, s1::2, s2::2, s2::2] = eri
-    return eri_so
 
 
 class GWCCSelfEnergy:
@@ -75,7 +52,10 @@ class GWCCSelfEnergy:
         self.res = self.eom.kernel('ee', nroots=nroots)
         rho, rho_star = self.res.transition_densities()
 
-        eri_so = spin_orbital_chemist_eri(mf)
+        # Through get_two_electron_integrals_chemist rather than ao2mo directly so
+        # that an attached solvent screening (v -> v + vtilde) reaches this
+        # self-energy too -- see src/Base/solvent_screening.py.
+        eri_so = get_two_electron_integrals_chemist(mf.mol, mf, representation='spin')
         # Kept complex: degenerate EOM roots give complex-conjugate eigenvector
         # pairs whose Im*Im cross term is dropped if truncated to real early.
         self.V = np.einsum('pqrs,nrs->npq', eri_so, rho, optimize=True)
@@ -97,31 +77,9 @@ class GWCCSelfEnergy:
         den_v = w - self.eps[v][None, :] - self.omega_n[:, None] + 1j * eta
         return np.sum(num_o / den_o) + np.sum(num_v / den_v)
 
-    def solve_qp(self, p, eta=DEFAULT_BROADENING_ETA, method='graphical'):
-        """Solve w = eps_p + Re Sigma_c,pp(w) (HF reference). Returns Hartree."""
-        func = lambda w: w - self.eps[p] - self.sigma_c(w, p, eta=eta).real
+    def solve_qp(self, p, eta=DEFAULT_BROADENING_ETA, method='pole_strength', static_shift=0.0):
+        """Solve w = eps_p + static_shift + Re Sigma_c,pp(w) (HF reference).
+        Returns Hartree. static_shift carries any state-independent-of-w term
+        the caller adds, e.g. a solvent reaction field."""
+        func = lambda w: w - self.eps[p] - static_shift - self.sigma_c(w, p, eta=eta).real
         return solve_qp_equation(func, self.eps[p], method=method)
-
-
-def calc_qp_energy_gwcc(mf, level='ccsdt', state='homo', eta=DEFAULT_BROADENING_ETA,
-                        method='graphical', nroots=8, return_solver=False, verbose=False):
-    """G0W@CC quasiparticle energy (eV, matching calc_qp_energy's convention).
-
-    mf: converged closed-shell RHF (the HF reference the paper uses -- a KS
-    reference would additionally need a v_xc correction, not implemented).
-    level: 'ccsdt' or 'ccsd' screening (EOM-CCSDT / EOM-CCSD polarizability).
-    state: 'homo', 'lumo', or a spin-orbital index.
-    nroots: EE states in the Lehmann sum -- see GWCCSelfEnergy's docstring
-        for why this needs generous padding past any degenerate manifold.
-    """
-    solver = GWCCSelfEnergy(mf, level=level, nroots=nroots, verbose=verbose)
-    if state == 'homo':
-        p = solver.nocc - 1
-    elif state == 'lumo':
-        p = solver.nocc
-    else:
-        p = int(state)
-    qp_ev = solver.solve_qp(p, eta=eta, method=method) * HARTREE_TO_EV
-    if return_solver:
-        return qp_ev, solver
-    return qp_ev

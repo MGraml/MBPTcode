@@ -9,7 +9,9 @@ from pyscf import gto, scf, cc, df
 from src.SingleReference.GW.qp_energy import calc_qp_energy
 from src.SingleReference.DensityMatrix.density_matrix import compute_gw_density_matrix
 
-# The 6 self-energy variants requested:
+# The 6 self-energy variants requested: GW under each of the 3 screening
+# choices (RPA/TDHF/BSE, all vertex_mode='GW'), plus the two vertex-corrected
+# families GWGammaInf and PSD1/PSD2 (kept at their usual BSE-screened vertex).
 METHODS = {
     'GW@RPA':     dict(selfenergy='GW@RPA',     polarizability='RPA'),
     'GW@TDHF':    dict(selfenergy='GW@TDHF',    polarizability='TDHF'),
@@ -21,8 +23,10 @@ METHODS = {
 
 
 def build_density_corrections(mf, mol):
-    """
-    None, CCSD, GW-linearized, GW-relaxed -- CCSD needs an RHF reference
+    """None, CCSD, GW-linearized, GW-relaxed -- CCSD needs an RHF reference
+    even when mf itself is a KS object, so it is built from a separate RHF
+    object on the same mol and applied as a source-agnostic AO density
+    correction on top of whichever mf is being tested.
     """
     mf_hf = scf.RHF(mol).run()
     mycc = cc.CCSD(mf_hf).run()

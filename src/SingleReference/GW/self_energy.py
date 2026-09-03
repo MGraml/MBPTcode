@@ -2,6 +2,7 @@ import numpy as np
 from src.SingleReference.GW.transition_amplitudes import AmplitudeGenerator
 from src.SingleReference.base import get_occ_virt_indices
 from src.Base.constants import DEFAULT_BROADENING_ETA, DEFAULT_BLOCK_SIZE, get_method_info
+from src.Base.solvent_screening import solvent_static_selfenergy
 from src.SingleReference.LinearResponse.linear_response import LinearResponseSolver
 from src.SingleReference.LinearResponse.casida import CasidaSolver
 from src.Solvers.qp_equation import solve_qp_equation_newton
@@ -18,7 +19,7 @@ class SelfEnergySolver(AmplitudeGenerator):
         self.spin_mode = spin_mode.lower()
         self.eta = eta
         self.block_size = block_size
-
+        
         if self.spin_mode == 'unrestricted':
             self.eps_a, self.eps_b = eps
             if df_coeff is not None:
@@ -60,7 +61,7 @@ class SelfEnergySolver(AmplitudeGenerator):
         """Diagonal self-energy Sigma_pp(omega) for a single frequency or grid; vertex_mode: 'GW', 'GWGammaInf', 'PSD1'-'PSD9'."""
         is_scalar = np.isscalar(freq)
         freq_grid = np.atleast_1d(freq)
-
+        
         if self.spin_mode == 'unrestricted':
             eps = self.eps_a if spin_channel == 'alpha' else self.eps_b
             nocc_a, nocc_b = nocc
@@ -70,15 +71,15 @@ class SelfEnergySolver(AmplitudeGenerator):
             eps = self.eps
             nocc_spin = nocc
             prefactor = 2.0
-
+            
         norb = len(eps)
         nexciton = len(eigenvalues_casida)
-
+        
         if chiXYa.ndim == 2:
             amp2 = chiXYa
         else:
             amp2 = chiXYa[:, :, p_state]
-
+            
         if chiXYb is not None:
             if chiXYb.ndim == 2:
                 amp = chiXYb
@@ -86,7 +87,7 @@ class SelfEnergySolver(AmplitudeGenerator):
                 amp = chiXYb[:, :, p_state]
         else:
             amp = None
-
+            
         if vertex_mode not in KNOWN_VERTEX_MODES:
             raise ValueError(
                 f"Unknown vertex_mode '{vertex_mode}'; expected one of {KNOWN_VERTEX_MODES}."
@@ -126,7 +127,7 @@ class SelfEnergySolver(AmplitudeGenerator):
                 if self.spin_mode == 'unrestricted':
                     omega_t_ba, omega_t_ab = eigenvalues_casida_t
                     chi_t_ba, chi_t_ab = chiXYb_t
-
+                    
                     def compute_channel_sigmaTt(omega_t, amp_t_raw):
                         if amp_t_raw.ndim == 2:
                             amp_t = amp_t_raw
@@ -134,7 +135,7 @@ class SelfEnergySolver(AmplitudeGenerator):
                             amp_t = amp_t_raw[:, :, p_state]
                         denom_t = self._denom_grid(w, eps, nocc_spin, omega_t, calc_imag)
                         return (0.5 * prefactor) * np.sum((amp_t**2) * denom_t)
-
+                        
                     sigmaTt_ba = compute_channel_sigmaTt(omega_t_ba, chi_t_ba)
                     sigmaTt_ab = compute_channel_sigmaTt(omega_t_ab, chi_t_ab)
                     if vertex_mode == 'PSD2':
@@ -152,7 +153,7 @@ class SelfEnergySolver(AmplitudeGenerator):
                         amp_t = chiXYb_t[:, :, p_state]
                     denom_t = self._denom_grid(w, eps, nocc_spin, eigenvalues_casida_t, calc_imag)
                     sigmaTt = (0.5 * prefactor) * np.sum((amp_t**2) * denom_t)
-
+                    
                     if vertex_mode == 'PSD2':
                         val += 1.5 * sigmaTt
                     elif vertex_mode == 'PSD4':
@@ -161,9 +162,9 @@ class SelfEnergySolver(AmplitudeGenerator):
                         val += 0.75 * sigmaTt
                     elif vertex_mode == 'PSD9':
                         val += 1.5 * sigmaTt
-
+                
             sigma_grid.append(val)
-
+            
         if is_scalar:
             return sigma_grid[0]
         else:
@@ -173,7 +174,7 @@ class SelfEnergySolver(AmplitudeGenerator):
         """Full self-energy matrix at the QP energies (eigenvalues), symmetrized."""
         if eigenvalues is None:
             eigenvalues = self.eps
-
+            
         if self.spin_mode == 'unrestricted':
             eps = eigenvalues
             nocc_spin = nocc
@@ -182,21 +183,21 @@ class SelfEnergySolver(AmplitudeGenerator):
             eps = eigenvalues
             nocc_spin = nocc
             prefactor = 1.0
-
+            
         nmo = len(eps)
         nexciton = len(eigenvalues_casida)
-
+        
         sign = np.zeros(nmo)
         for i in range(nmo):
             sign[i] = 1.0 if i < nocc_spin else -1.0
-
+            
         eps_p = eps[None, None, :]
         eps_r = eps[None, :, None]
         sign_r_omega_S = (sign[:, None] * eigenvalues_casida[None, :]).T[:, :, None]
-
+        
         energy = eps_p - eps_r + sign_r_omega_S
         denom = energy / (energy**2 + self.eta**2)
-
+        
         if vertex_mode == 'GW' or chiXYb is None:
             chi_T = chiXYa * denom
             tmp = np.einsum('Srq, Srp -> qp', chiXYa, chi_T)
@@ -214,7 +215,7 @@ class SelfEnergySolver(AmplitudeGenerator):
         else:
             chi_T = chiXYa * denom
             tmp = np.einsum('Srq, Srp -> qp', chiXYa, chi_T)
-
+            
         self_energy_matrix = prefactor * (tmp + tmp.T)
         return self_energy_matrix
 
@@ -281,8 +282,18 @@ class SelfEnergySolver(AmplitudeGenerator):
         eri = self.eri_chemist
         coeff = self.df_coeff
         norb = len(eps)
-
+        
         xc_correction = 0.0
+        if mf is not None:
+            # First-order reaction field of an attached solvent screening (None
+            # in the gas phase) -- see src/Base/solvent_screening.py.
+            sigma_solvent = solvent_static_selfenergy(mf, mol)
+            if sigma_solvent is not None:
+                if isinstance(sigma_solvent, tuple):
+                    raise NotImplementedError(
+                        "solvent screening through solve_quasiparticle_energy "
+                        "is restricted-only, like the rest of this method")
+                xc_correction += sigma_solvent[p_state, p_state]
         if mf is not None and mol is not None and hasattr(mf, 'xc'):
             from pyscf import scf, dft
             dm = mf.make_rdm1(mf.mo_coeff, mf.mo_occ)
@@ -291,11 +302,11 @@ class SelfEnergySolver(AmplitudeGenerator):
                 mf_hf = scf.UHF(mol)
             else:
                 mf_hf = scf.RHF(mol)
-
+            
             V_Hxc_mo = mf.mo_coeff.T @ V_Hxc @ mf.mo_coeff
             V_Hx_mo = self.calculate_sigma_hx(mol, mf_hf, dm, mf.mo_coeff)
-            xc_correction = V_Hx_mo[p_state, p_state] - V_Hxc_mo[p_state, p_state]
-
+            xc_correction += V_Hx_mo[p_state, p_state] - V_Hxc_mo[p_state, p_state]
+        
         lr_solver = LinearResponseSolver(eps, coeff_df=coeff, eri_chemist=eri, spin_mode=self.spin_mode, eta=self.eta)
 
         if w_aux is None:
@@ -311,10 +322,10 @@ class SelfEnergySolver(AmplitudeGenerator):
                     d = np.array([eps[a] - eps[i] for i in occ for a in virt])
                     f = lr_solver._get_f_rpa(d, 0.0, is_imaginary=False)
                     chi0 = np.diag(2.0 * f)
-
+                    
                     V_trans = eri[np.ix_(occ, virt, occ, virt)].reshape(n_pair, n_pair)
                     chi = chi0 @ np.linalg.inv(np.eye(n_pair) - V_trans @ chi0)
-
+                    
                     eri_ov = eri[np.ix_(occ, virt)].reshape(n_pair, norb, norb)
                     tmp = chi @ eri_ov.reshape(n_pair, -1)
                     W_rpa = eri + np.einsum('Spq, Srs -> pqrs', eri_ov, tmp.reshape(n_pair, norb, norb))
@@ -324,7 +335,7 @@ class SelfEnergySolver(AmplitudeGenerator):
             A_rpa, B_rpa = lr_solver.build_casida_matrices(nocc, lBSE=False)
             omega, X, Y = CasidaSolver(A_rpa, B_rpa).solve()
             chi_a = self.get_chi_a(nocc, X, Y, p_state=p_state)
-
+            
             func = lambda w: w - eps[p_state] - xc_correction - self.calculate_self_energy(
                 p_state, w, nocc, omega, chi_a, None, vertex_mode='GW'
             )
@@ -333,7 +344,7 @@ class SelfEnergySolver(AmplitudeGenerator):
             omega_s, X_s, Y_s = CasidaSolver(A_s, B_s).solve()
             chi_a_s = self.get_chi_a(nocc, X_s, Y_s, p_state=p_state)
             chi_b_s_vertex = self.get_chi_b_vertex(nocc, X_s, Y_s, eri_w=W_rpa, p_state=p_state)
-
+            
             if not method_info['needs_vertex']:
                 func = lambda w: w - eps[p_state] - xc_correction - self.calculate_self_energy(
                     p_state, w, nocc, omega_s, chi_a_s, None, vertex_mode='GW'
@@ -348,7 +359,7 @@ class SelfEnergySolver(AmplitudeGenerator):
                     A_t, B_t = lr_solver.build_casida_matrices(nocc, lBSE=True, W_aux=w_aux, triplet=True)
                     omega_t, X_t, Y_t = CasidaSolver(A_t, B_t).solve()
                     chi_b_t_vertex = self.get_chi_b_vertex(nocc, X_t, Y_t, eri_w=W_rpa, p_state=p_state)
-
+                    
                     func = lambda w: w - eps[p_state] - xc_correction - self.calculate_self_energy(
                         p_state, w, nocc, omega_s, chi_a_s, chi_b_s_vertex,
                         eigenvalues_casida_t=omega_t, chiXYb_t=chi_b_t_vertex,
@@ -359,16 +370,16 @@ class SelfEnergySolver(AmplitudeGenerator):
                         p_state, w, nocc, omega_s, chi_a_s, chi_b_s_vertex,
                         vertex_mode=vertex_mode
                     )
-
+                    
         if solver_mode == 'graphical':
             from src.Solvers.qp_equation import solve_qp_equation_graphical
             qp = solve_qp_equation_graphical(func, eps[p_state])
         else:
             qp = solve_qp_equation_newton(func, eps[p_state])
-
+            
         return qp
 
-    def calculate_spectral_function(self, p_state, omega_grid, nocc, eigenvalues_casida, chiXYa, chiXYb=None,
+    def calculate_spectral_function(self, p_state, omega_grid, nocc, eigenvalues_casida, chiXYa, chiXYb=None, 
                                     eigenvalues_casida_t=None, chiXYb_t=None, spin_channel='alpha', vertex_mode='GW',
                                     V_xc_mo=0.0):
         """Spectral function A(omega) on a frequency grid for a target MO state."""
@@ -376,20 +387,20 @@ class SelfEnergySolver(AmplitudeGenerator):
             eps = self.eps_a if spin_channel == 'alpha' else self.eps_b
         else:
             eps = self.eps
-
+            
         eps_p = eps[p_state]
-
+        
         sigma_re = self.calculate_self_energy(
             p_state, omega_grid, nocc, eigenvalues_casida, chiXYa, chiXYb,
             eigenvalues_casida_t, chiXYb_t, spin_channel, vertex_mode, calc_imag=False
         )
-
+        
         sigma_im = self.calculate_self_energy(
             p_state, omega_grid, nocc, eigenvalues_casida, chiXYa, chiXYb,
             eigenvalues_casida_t, chiXYb_t, spin_channel, vertex_mode, calc_imag=True
         )
-
+        
         denom = (omega_grid - eps_p - sigma_re - V_xc_mo)**2 + sigma_im**2
         spectral_function = -sigma_im / (np.pi * denom)
-
+        
         return spectral_function, sigma_re, sigma_im

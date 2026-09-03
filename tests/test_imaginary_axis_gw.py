@@ -7,6 +7,7 @@ from pyscf import gto, scf, df
 
 from src.SingleReference.GW.qp_energy import calc_qp_energy
 from src.SingleReference.GW.imaginary_axis import solve_qp_energy_imaginary_axis
+from src.Base.constants import HARTREE_TO_EV
 
 benzene_geom = """
 C  0.000  1.396  0.000
@@ -46,7 +47,7 @@ if __name__ == '__main__':
         p_state = nocc - 1 if which == 'homo' else nocc
 
         qp_analytic = calc_qp_energy(mf, selfenergy='GW', polarizability='RPA', df=True, state=p_state)
-        qp_ac = solve_qp_energy_imaginary_axis(mf, mol, nocc, p_state, nfreq=nfreq) * 27.2114
+        qp_ac = solve_qp_energy_imaginary_axis(mf, mol, nocc, p_state, nfreq=nfreq) * HARTREE_TO_EV
 
         diff_mev = (qp_ac - qp_analytic) * 1000
         ok = abs(diff_mev) < 2.0

@@ -34,7 +34,7 @@ from pyscf.scf import addons
 
 from src.SingleReference.CC.eom import EOMCC
 from src.SingleReference.CC import determinant_space as ds
-from src.SingleReference.GW.gw_polarizability import dipole_integrals_so
+from src.Base.pyscf_interface import get_dipole_integrals
 
 LIH_STO3G = dict(atom='Li 0 0 0; H 0 0 1.5957', basis='sto-3g', verbose=0)
 H2_STO3G = dict(atom='H 0 0 0; H 0 0 0.74', basis='sto-3g', verbose=0)
@@ -199,7 +199,7 @@ def check_polarizability_vs_finite_field_fci():
     mf = scf.RHF(mol).run()
     eom = EOMCC(mf, level='ccsdt', t_stopping_eps=1e-11, max_iter=200)
     res_r = eom.kernel('ee', nroots=4)
-    dip_so = dipole_integrals_so(mf)
+    dip_so = get_dipole_integrals(mf.mol, mf, representation='spin')
     alpha = res_r.polarizability(dip_so, omega_grid=[0.0])[0]
 
     def fci_energy(field):

@@ -1,8 +1,8 @@
 """Unified dynamical quasiparticle-equation solvers: root finders for f(w) = w - eps - Sigma(w) = 0.
 
-Sigma is any frequency-dependent quantity (GW/PSD self-energy, embedding
-self-energy, dynamical downfolded Hamiltonian eigenvalue). Every root search
-in the codebase goes through these routines.
+Sigma is any frequency-dependent quantity (GW/PSD self-energy, ADC static
+correction, embedding self-energy). Every root search in the codebase goes
+through these routines.
 """
 import numpy as np
 from src.Base.constants import (
@@ -13,9 +13,9 @@ from src.Base.constants import (
 )
 
 
-def solve_qp_equation(func, e_start, method='graphical', **kwargs):
-    """Single entry point dispatching to the bisection/newton/graphical root
-    finders below. func(w) must return f(w) = w - eps - Sigma(w) (or any
+def solve_qp_equation(func, e_start, method='pole_strength', **kwargs):
+    """Single entry point dispatching to the pole-strength/graphical/newton/
+    bisection root finders below. func(w) must return f(w) = w - eps - Sigma(w) (or any
     function whose root is the sought quasiparticle/eigenvalue energy);
     e_start is the zeroth-order guess (e.g. the KS/HF eigenvalue)."""
     if method == 'graphical':
@@ -29,7 +29,8 @@ def solve_qp_equation(func, e_start, method='graphical', **kwargs):
         w_max = kwargs.pop('w_max', e_start + 0.5)
         return solve_qp_equation_bisection(func, w_min, w_max, **kwargs)
     raise ValueError(f"Unknown QP-equation method '{method}' "
-                     "(expected 'graphical', 'newton', or 'bisection')")
+                     "(expected 'pole_strength', 'graphical', 'newton', "
+                     "or 'bisection')")
 
 
 def solve_qp_equation_bisection(func, w_min, w_max, tol=QP_BISECTION_TOL, max_iter=QP_BISECTION_MAX_ITER):
@@ -51,21 +52,21 @@ def solve_qp_equation_bisection(func, w_min, w_max, tol=QP_BISECTION_TOL, max_it
                 break
         else:
             raise ValueError(f"Same sign at endpoints: f({a})={fa}, f({b})={fb}. No root guaranteed.")
-
+            
     for i in range(max_iter):
         c = 0.5 * (a + b)
         fc = func(c)
-
+        
         if abs(fc) < tol or 0.5 * (b - a) < tol:
             return c
-
+            
         if fa * fc < 0:
             b = c
             fb = fc
         else:
             a = c
             fa = fc
-
+            
     return 0.5 * (a + b)
 
 def solve_qp_equation_newton(func, e_start, deriv_func=None, tol=QP_NEWTON_TOL, max_iter=QP_NEWTON_MAX_ITER, damping=1.0):
@@ -75,7 +76,7 @@ def solve_qp_equation_newton(func, e_start, deriv_func=None, tol=QP_NEWTON_TOL, 
         fw = func(w)
         if abs(fw) < tol:
             return w
-
+            
         if deriv_func is not None:
             dfw = deriv_func(w)
         else:

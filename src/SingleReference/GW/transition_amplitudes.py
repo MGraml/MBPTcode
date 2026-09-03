@@ -123,16 +123,16 @@ class AmplitudeGenerator:
             occ_b, virt_b = self._get_occ_virt_indices(self.eps_b, nocc_b)
             n_pair_a = len(occ_a) * len(virt_a)
             n_pair_b = len(occ_b) * len(virt_b)
-
+            
             XpY_a = XpY[:n_pair_a, :]
             XpY_b = XpY[n_pair_a:, :]
-
+            
             if spin_channel == 'alpha':
                 norb_target = self.norb_a
                 if p_state is not None:
                     eri_a_slice = self.eri_a[:, :, p_state, :][np.ix_(occ_a, virt_a)].reshape(n_pair_a, -1)
                     eri_ab_slice = self.eri_ab[p_state, :, :, :][:, occ_b[:, None], virt_b].reshape(norb_target, n_pair_b).T
-
+                    
                     chi = self._blocked_contract(XpY_a, eri_a_slice, XpY_b, eri_ab_slice)
                 else:
                     eri_a_flat = self.eri_a[np.ix_(occ_a, virt_a)].reshape(n_pair_a, -1)
@@ -144,7 +144,7 @@ class AmplitudeGenerator:
                 if p_state is not None:
                     eri_ab_slice = self.eri_ab[:, :, p_state, :][np.ix_(occ_a, virt_a)].reshape(n_pair_a, -1)
                     eri_b_slice = self.eri_b[:, :, p_state, :][np.ix_(occ_b, virt_b)].reshape(n_pair_b, -1)
-
+                    
                     chi = self._blocked_contract(XpY_a, eri_ab_slice, XpY_b, eri_b_slice)
                 else:
                     eri_ab_flat = self.eri_ab[np.ix_(occ_a, virt_a)].reshape(n_pair_a, -1)
@@ -156,7 +156,7 @@ class AmplitudeGenerator:
             n_pair = len(occ) * len(virt)
             UpY_3d = XpY.reshape(len(occ), len(virt), -1)
             UpY_flat = UpY_3d.reshape(n_pair, -1)
-
+            
             if p_state is not None:
                 eri_slice = self.eri_chemist[:, :, :, p_state][np.ix_(occ, virt)].reshape(n_pair, -1)
                 nexciton = UpY_flat.shape[1]
@@ -177,17 +177,17 @@ class AmplitudeGenerator:
             nocc_a, nocc_b = nocc
             nocc_spin = nocc_a if spin_channel == 'alpha' else nocc_b
             occ, virt = self._get_occ_virt_indices(eps, nocc_spin)
-
+            
             occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
             n_pair_a = len(occ_a) * len(virt_a)
-
+            
             if spin_channel == 'alpha':
                 X_spin = X[:n_pair_a, :]
                 Y_spin = Y[:n_pair_a, :]
             else:
                 X_spin = X[n_pair_a:, :]
                 Y_spin = Y[n_pair_a:, :]
-
+                
             X_3d = X_spin.reshape(len(occ), len(virt), -1)
             Y_3d = Y_spin.reshape(len(occ), len(virt), -1)
         else:
@@ -196,12 +196,12 @@ class AmplitudeGenerator:
             occ, virt = self._get_occ_virt_indices(self.eps, nocc)
             X_3d = X.reshape(len(occ), len(virt), -1)
             Y_3d = Y.reshape(len(occ), len(virt), -1)
-
+            
         norb = len(eps)
         nexciton = X_3d.shape[2]
         X_flat = X_3d.reshape(-1, nexciton)
         Y_flat = Y_3d.reshape(-1, nexciton)
-
+        
         W = np.eye(self.naux) if eri_w is None else np.asarray(eri_w)
         w_key = self._identity_key(eri_w) if eri_w is not None else ('eye', self.naux)
 
@@ -260,20 +260,20 @@ class AmplitudeGenerator:
             C_op = coeff[:, occ, :]
             C_vp = coeff[:, virt, :]
             C_oo = coeff[:, occ[:, None], occ]
-
+            
             tmp_1 = W @ C_op.reshape(self.naux, -1)
             C_vo_flat = C_vo.reshape(self.naux, -1)
             res_1 = C_vo_flat.T @ tmp_1
             integs1_iakp = res_1.reshape(len(virt), len(occ), len(occ), norb).transpose(2, 0, 1, 3)
-
+            
             tmp_2 = W @ C_oo.reshape(self.naux, -1)
             C_vp_flat = C_vp.reshape(self.naux, -1)
             res_2 = C_vp_flat.T @ tmp_2
             integs2_iakp = res_2.reshape(len(virt), norb, len(occ), len(occ)).transpose(2, 0, 3, 1)
-
+            
             integs1_flat_o = integs1_iakp.reshape(len(occ) * len(virt), len(occ) * norb)
             integs2_flat_o = integs2_iakp.reshape(len(occ) * len(virt), len(occ) * norb)
-
+            
             chi_occ = self._blocked_contract(X_flat, integs1_flat_o, Y_flat, integs2_flat_o).reshape(nexciton, len(occ), norb)
 
             # Full virtual block
@@ -310,17 +310,17 @@ class AmplitudeGenerator:
             nocc_a, nocc_b = nocc
             nocc_spin = nocc_a if spin_channel == 'alpha' else nocc_b
             occ, virt = self._get_occ_virt_indices(eps, nocc_spin)
-
+            
             occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
             n_pair_a = len(occ_a) * len(virt_a)
-
+            
             if spin_channel == 'alpha':
                 X_spin = X[:n_pair_a, :]
                 Y_spin = Y[:n_pair_a, :]
             else:
                 X_spin = X[n_pair_a:, :]
                 Y_spin = Y[n_pair_a:, :]
-
+                
             X_3d = X_spin.reshape(len(occ), len(virt), -1)
             Y_3d = Y_spin.reshape(len(occ), len(virt), -1)
         else:
@@ -331,20 +331,20 @@ class AmplitudeGenerator:
             occ, virt = self._get_occ_virt_indices(self.eps, nocc)
             X_3d = X.reshape(len(occ), len(virt), -1)
             Y_3d = Y.reshape(len(occ), len(virt), -1)
-
+            
         norb = len(eps)
         nexciton = X_3d.shape[2]
         X_flat = X_3d.reshape(-1, nexciton)
         Y_flat = Y_3d.reshape(-1, nexciton)
-
+        
         if p_state is not None:
             # Sliced occupied block
             integs1_iak = eri_w[:, :, :, p_state][np.ix_(virt, occ, occ)].transpose(2, 0, 1)
             integs2_iak = eri_w[:, p_state, :, :][np.ix_(virt, occ, occ)].transpose(1, 0, 2)
-
+            
             integs1_flat_o = integs1_iak.reshape(len(occ) * len(virt), len(occ))
             integs2_flat_o = integs2_iak.reshape(len(occ) * len(virt), len(occ))
-
+            
             chi_occ = self._blocked_contract(X_flat, integs1_flat_o, Y_flat, integs2_flat_o)
 
             # Sliced virtual block
@@ -395,38 +395,38 @@ class AmplitudeGenerator:
             eps = self.eps
             coeff = self.df_coeff
             nocc_spin = nocc
-
+            
         occ, virt = self._get_occ_virt_indices(eps, nocc_spin)
         norb = len(eps)
         nexciton = len(eigenvalues_casida)
-
+        
         chiXYa_ov = chiXYa[:, occ, :][:, :, virt]
-
+        
         # Vectorized denominators
         d_ia = eps[virt] - eps[occ][:, None]
         denom_minus = 1.0 / (d_ia[None, :, :] - eigenvalues_casida[:, None, None])
         denom_plus = 1.0 / (d_ia[None, :, :] + eigenvalues_casida[:, None, None])
-
+        
         chiXY_minus = chiXYa_ov * denom_minus
         chiXY_plus = chiXYa_ov * denom_plus
-
+        
         eri_pajk = np.einsum('Ppa, Pjk -> pajk', coeff[:, :, virt], coeff[:, occ[:, None], occ])
         wt_pk = np.einsum('pajk, Sja -> pkS', eri_pajk, chiXY_plus)
-
+        
         eri_pjak = np.einsum('Ppj, Pak -> pjak', coeff[:, :, occ], coeff[:, virt[:, None], occ])
         wt_pk += np.einsum('pjak, Sja -> pkS', eri_pjak, chiXY_minus)
-
+        
         eri_pajc = np.einsum('Ppa, Pjc -> pajc', coeff[:, :, virt], coeff[:, occ[:, None], virt])
         wt_pc = np.einsum('pajc, Sja -> pcS', eri_pajc, chiXY_minus)
-
+        
         eri_pjac = np.einsum('Ppj, Pac -> pjac', coeff[:, :, occ], coeff[:, virt[:, None], virt])
         wt_pc += np.einsum('pjac, Sja -> pcS', eri_pjac, chiXY_plus)
-
+        
         chiXYb = np.zeros((nexciton, norb, norb))
         for S in range(nexciton):
             chiXYb[S, :len(occ), :] = wt_pk[:, :, S].T
             chiXYb[S, len(occ):, :] = wt_pc[:, :, S].T
-
+            
         return chiXYb
 
     def get_chi_b_psd_full(self, nocc, eigenvalues_casida, chiXYa, spin_channel='alpha', eri_w=None, p_state=None):
@@ -444,44 +444,44 @@ class AmplitudeGenerator:
             if eri_w is None:
                 eri_w = eri
             nocc_spin = nocc
-
+            
         occ, virt = self._get_occ_virt_indices(eps, nocc_spin)
         norb = len(eps)
         nexciton = len(eigenvalues_casida)
-
+        
         chiXYa_ov = chiXYa[:, occ, :][:, :, virt]
-
+        
         # Vectorized denominators
         d_ia = eps[virt] - eps[occ][:, None]
         denom_minus = 1.0 / (d_ia[None, :, :] - eigenvalues_casida[:, None, None])
         denom_plus = 1.0 / (d_ia[None, :, :] + eigenvalues_casida[:, None, None])
-
+        
         chiXY_minus = chiXYa_ov * denom_minus
         chiXY_plus = chiXYa_ov * denom_plus
-
+        
         eri_pajk = eri_w[np.ix_(np.arange(norb), virt, occ, occ)]
         wt_pk = np.einsum('pajk, Sja -> pkS', eri_pajk, chiXY_plus)
-
+        
         eri_pjak = eri_w[np.ix_(np.arange(norb), occ, virt, occ)]
         wt_pk += np.einsum('pjak, Sja -> pkS', eri_pjak, chiXY_minus)
-
+        
         eri_pajc = eri_w[np.ix_(np.arange(norb), virt, occ, virt)]
         wt_pc = np.einsum('pajc, Sja -> pcS', eri_pajc, chiXY_minus)
-
+        
         eri_pjac = eri_w[np.ix_(np.arange(norb), occ, virt, virt)]
         wt_pc += np.einsum('pjac, Sja -> pcS', eri_pjac, chiXY_plus)
-
+        
         chiXYb = np.zeros((nexciton, norb, norb))
         for S in range(nexciton):
             chiXYb[S, :len(occ), :] = wt_pk[:, :, S].T
             chiXYb[S, len(occ):, :] = wt_pc[:, :, S].T
-
+            
         return chiXYb
 
     def get_chi_b_vertex_sf_df(self, nocc, X, Y, spin_channel='alpha', channel='ba', eri_w=None, p_state=None):
         """Computes the spin-flip vertex correction transition amplitude chiXYb using density fitting."""
         nocc_a, nocc_b = nocc
-
+        
         # Helper to get the correct density fitting block
         def get_df_block(spin1, spin2, idx1, idx2):
             if spin1 == 'a' and spin2 == 'a':
@@ -492,12 +492,12 @@ class AmplitudeGenerator:
                 return self.df_ab[:, idx1[:, None], idx2]
             else: # 'a' and 'b'
                 return self.df_ab[:, idx2[:, None], idx1].transpose(0, 2, 1)
-
+                
         # Determine excitation spins
         s_i = 'b' if channel == 'ba' else 'a'
         s_a = 'a' if channel == 'ba' else 'b'
         s_p = 'a' if spin_channel == 'alpha' else 'b'
-
+        
         if channel == 'ba':
             occ = np.arange(nocc_b)
             virt = np.arange(nocc_a, self.norb_a)
@@ -506,19 +506,19 @@ class AmplitudeGenerator:
             occ = np.arange(nocc_a)
             virt = np.arange(nocc_b, self.norb_b)
             virt_target = np.arange(nocc_a, self.norb_a)
-
+            
         nocc_val = len(occ)
         nvirt_val = len(virt)
         nvirt_target = len(virt_target)
         nexciton = X.shape[1]
-
+        
         X_spin = X
         Y_spin = Y
         X_3d = X_spin.reshape(nocc_val, nvirt_val, -1)
         Y_3d = Y_spin.reshape(nocc_val, nvirt_val, -1)
         X_flat = X_3d.reshape(-1, nexciton)
         Y_flat = Y_3d.reshape(-1, nexciton)
-
+        
         W = np.eye(self.naux) if eri_w is None else np.asarray(eri_w)
         w_key = self._identity_key(eri_w) if eri_w is not None else ('eye', self.naux)
 
@@ -573,28 +573,28 @@ class AmplitudeGenerator:
     def get_chi_b_vertex_sf_full(self, nocc, X, Y, spin_channel='alpha', channel='ba', eri_w=None, p_state=None):
         """Computes the spin-flip vertex correction transition amplitude chiXYb using full ERIs."""
         nocc_a, nocc_b = nocc
-
+        
         if channel == 'ba':
             occ = np.arange(nocc_b)
             virt = np.arange(nocc_a, self.norb_a)
         else:
             occ = np.arange(nocc_a)
             virt = np.arange(nocc_b, self.norb_b)
-
+            
         nocc_val = len(occ)
         nvirt_val = len(virt)
         nexciton = X.shape[1]
-
+        
         X_spin = X
         Y_spin = Y
         X_3d = X_spin.reshape(nocc_val, nvirt_val, -1)
         Y_3d = Y_spin.reshape(nocc_val, nvirt_val, -1)
         X_flat = X_3d.reshape(-1, nexciton)
         Y_flat = Y_3d.reshape(-1, nexciton)
-
+        
         if eri_w is None:
             eri_w = self.eri_ab
-
+            
         if spin_channel == 'alpha':
             norb_target = len(self.eps_b)
             if channel == 'ba':
@@ -611,10 +611,10 @@ class AmplitudeGenerator:
             else:
                 integs1 = eri_w[np.ix_(np.arange(norb_target), np.array([p_state]), occ, virt)].transpose(2, 3, 0, 1)[:, :, :, 0]
                 integs2 = eri_w[np.ix_(occ, np.array([p_state]), np.arange(norb_target), virt)].transpose(0, 3, 2, 1)[:, :, :, 0]
-
+                
         integs1_flat_o = integs1[:, :, :nocc_val].reshape(nocc_val * nvirt_val, nocc_val)
         integs2_flat_o = integs2[:, :, :nocc_val].reshape(nocc_val * nvirt_val, nocc_val)
-
+        
         chi_occ = self._blocked_contract(X_flat, integs1_flat_o, Y_flat, integs2_flat_o)
 
         integs1_flat_v = integs1[:, :, nocc_val:].reshape(nocc_val * nvirt_val, nvirt_val)
