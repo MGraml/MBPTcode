@@ -1484,10 +1484,12 @@ def compute_mp3_density_matrix_ao(mf, mol=None, nocc=None, relax=True, relax_ker
     Hartree + exact-exchange Hessian) -- RHF only; UHF does not support relax=True
     yet (no UHF CPHF/Z-vector solve implemented here).
 
-    The relax=True density is NOT the fully relaxed density, we only relax orbitals
-    using the Schirmer approach, but never the amplitudes.
-    Therefore, it does not NOT satisfy the finite-field/Hellmann-Feynman dipole
-    sum rule (mu_z = -Tr[gamma @ z_AO] should equal -dE/dF_z;
+    relax=True is NOT a fully relaxed density: the orbitals are relaxed by the
+    Schirmer approach, the amplitudes never are. It therefore does NOT satisfy
+    the finite-field/Hellmann-Feynman dipole sum rule (mu_z = -Tr[gamma @ z_AO]
+    should equal -dE/dF_z), and what is left over is the size of the missing
+    amplitude response: 4.3e-03 on HF/6-31g, against 2.7e-06 for MP2 relaxed
+    through the same CPHF solve. Pinned in tests/test_mp3_finite_field.py.
     """
 
     mol = mol if mol is not None else mf.mol
