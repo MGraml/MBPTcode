@@ -142,12 +142,6 @@ def minimax_points_for_gw(eps, nocc, mu=None, target=DEFAULT_TAU_TARGET,
 def _transform_screened(Ctw, W_omega, chunk_bytes=2 << 30):
     """
     sum_omega Ctw[.,omega] (W(i.omega) - I), without ever copying all of W.
-
-    `W_omega - np.eye(naux)[None]` reads innocently but allocates a second
-    (nfreq, naux, naux) -- 170 GB at 10k basis functions, on top of the W it is
-    copying. Chunking over frequency bounds the temporary to `chunk_bytes`, and
-    the identity comes off the diagonal in place on the chunk rather than from a
-    broadcast np.eye. Pure: W_omega is not touched.
     """
     nfreq, naux = W_omega.shape[0], W_omega.shape[-1]
     step = max(1, min(nfreq, int(chunk_bytes // max(naux * naux * 8, 1))))
@@ -169,39 +163,11 @@ def screened_interaction_tau_blocked(X, D, eps, nocc, grid, Ctw, mu=None,
     Wt(i.tau) = sum_w Ctw[.,w] ( [I - chi0(i.w)]^-1 - I ), in one blocked pass.
 
     The in-core route builds all of chi0 (nfreq, naux, naux), inverts it in
-    place, then transforms -- so the whole frequency axis is live from the first
-    tau to the last. It does not have to be. Frequency is never coupled to
-    itself: the Dyson step is diagonal in omega, and the two transforms are
-    fan-ins in opposite directions with W(i.omega) as the pivot. A block of
-    frequencies can therefore be built, inverted, folded into Wt(i.tau), and
-    dropped. Peak becomes
-
-        Wt(tau)           ntau_out x naux^2     (unavoidable -- it is the result)
-      + one freq block    freq_block x naux^2
-
-    instead of nfreq x naux^2. At 10k basis functions, where naux^2 is 5.3 GB,
-    that is 95 + 21 GB against 170.
+    place, then transforms
 
     The catch is that every block needs all of proj(tau) again, and rebuilding
     those IS the N^3 cost of the method -- so recomputing them costs a factor
-    nfreq/freq_block in time. `scratch_dir` avoids that by caching them: written
-    on the first sweep, memory-mapped on the rest. It is OPT-IN, and off by
-    default, because it puts ntau x naux^2 on disk (2.9 GB at undecacene, 95 GB
-    at 10k) and only pays off when freq_block is genuinely smaller than nfreq.
-
-    `wt_scratch` puts Wt ITSELF on disk, memory-mapped. freq_block bounds the
-    frequency axis but Wt is the result and stays resident -- ntau x naux^2,
-    which is 55 GB at the 476-atom hexamer/cc-pVDZ and ~135 GB at cc-pVTZ,
-    where it does not fit alongside anything else. Every consumer touches it as
-    Wt[k] inside a tau loop, exactly once per k, so a memmap streams it at no
-    algorithmic cost.
-
-    static_index / static_out: capture [I - chi0(i.omega_k)]^-1 for one
-    frequency, before the identity is removed. Used to carry omega = 0 for a
-    BSE's static screening on the axis the self-energy is already building.
-    THE CALLER MUST ZERO THAT COLUMN OF Ctw: this routine folds every frequency
-    it is given into Wt, and a passenger that is not part of the Sigma
-    quadrature must contribute nothing to it.
+    nfreq/freq_block in time. `scratch_dir` avoids that by caching them.
 
     Returns Wt(i.tau) with shape (Ctw.shape[0], naux, naux), matching what
     `self_energy_matrix_imaginary_time` builds internally when Wt_tau is None.
@@ -255,10 +221,9 @@ def screened_interaction_tau_blocked(X, D, eps, nocc, grid, Ctw, mu=None,
                 if static_index is not None and k0 + m == static_index:
                     static_out['w_static'] = b.copy()      # before -I
                 b[dg] -= 1.0                  # the correlation part, W - I
+                
             # ONE OUTPUT TAU AT A TIME. `Wt += tensordot(Ctw[:, k0:k1], blk)`
-            # materializes a temporary the size of Wt itself, which is the very
-            # array wt_scratch exists to keep off the heap -- and it is the
-            # largest object in the route either way.
+            # materializes a temporary the size of Wt itself
             for t in range(Ctw.shape[0]):
                 Wt[t] += np.tensordot(Ctw[t, k0:k1], blk, axes=(0, 0))
             del blk
@@ -268,11 +233,6 @@ def screened_interaction_tau_blocked(X, D, eps, nocc, grid, Ctw, mu=None,
             if path and os.path.exists(path):
                 os.remove(path)
     if wt_scratch is not None:
-        # Hand back an in-memory copy only if it fits is NOT the contract here:
-        # the caller asked for Wt on disk precisely because it does not. Flush
-        # and re-open read-only, so the consumer streams it and the file is the
-        # caller's to remove -- it is the one object this routine cannot clean
-        # up itself, since it is the return value.
         Wt.flush()
         Wt = np.lib.format.open_memmap(wt_scratch, mode='r')
     return Wt

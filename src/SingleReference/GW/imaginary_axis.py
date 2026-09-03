@@ -125,14 +125,6 @@ def solve_qp_energy_imaginary_axis(mf, mol, nocc, p_state, nfreq=20, w0=None, gr
     # chemical potential, mid gap
     mu = 0.5 * (eps[nocc - 1] + eps[nocc])
 
-    # The Pade cap is sized from SIGMA's range, not from e_max. e_max is the
-    # largest particle-hole TRANSITION energy -- the range of W, which is what
-    # the frequency grid above was built for -- but the object being continued
-    # here is Sigma_c, and Sigma = -G Wt is a product whose poles sit at
-    # eps_m +/- omega_s. Its range is the sum, 1.6x larger on the systems where
-    # both have been measured. Sizing from e_max discards ~4 resolvable nodes
-    # of 40; it needs mu, which is why it sits here and not with the grid.
-
     # imaginary axis sampling point
     w_sigma = self_energy_range(eps, mu, e_max)
     pade_order = None if beta is None else ir_continuation_order(beta, w_sigma)
