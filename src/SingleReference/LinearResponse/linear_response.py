@@ -2,16 +2,25 @@ import numpy as np
 from src.SingleReference.LinearResponse.casida import CasidaSolver
 from src.SingleReference.base import get_occ_virt_indices
 from src.Base.constants import DEFAULT_BROADENING_ETA
+from src.SingleReference.LinearResponse import imaginary_frequency
 
 class LinearResponseSolver:
     """RPA and BSE linear response solver, restricted (RHF/singlet/triplet) or unrestricted (UHF), DF or full 4-center ERIs."""
-    def __init__(self, eps, coeff_df=None, eri_chemist=None, spin_mode='restricted', eta=DEFAULT_BROADENING_ETA):
-        """eps/coeff_df/eri_chemist: single array if restricted, (alpha, beta[, ab]) tuple if unrestricted."""
+    def __init__(self, eps, coeff_df=None, eri_chemist=None, spin_mode='restricted', eta=DEFAULT_BROADENING_ETA,
+                 coeff_ov=None):
+        """eps/coeff_df/eri_chemist: single array if restricted, (alpha, beta[, ab]) tuple if unrestricted.
+
+        coeff_ov: the (naux, nocc*nvirt) occupied-virtual block on its own, for
+        callers that never need the full (naux, norb, norb) coeff_df -- see
+        `get_df_coefficients_ov`. When given, the RPA screening uses it directly
+        and coeff_df may be left None.
+        """
         self.spin_mode = spin_mode.lower()
         self.eta = eta
         self.df_coeff = coeff_df
+        self.coeff_ov = coeff_ov
         self.eri_chemist = eri_chemist
-
+        
         if self.spin_mode == 'unrestricted':
             self.eps_a, self.eps_b = eps
             if coeff_df is not None:
@@ -32,6 +41,8 @@ class LinearResponseSolver:
             self.norb = len(self.eps)
             if self.df_coeff is not None:
                 self.naux = self.df_coeff.shape[0]
+            elif self.coeff_ov is not None:
+                self.naux = self.coeff_ov.shape[0]
 
     def _get_occ_virt_indices(self, eps, nocc):
         return get_occ_virt_indices(eps, nocc)
@@ -98,13 +109,7 @@ class LinearResponseSolver:
         return self.solve_rpa_screening(np.array([0.0]), nocc, is_imaginary=True)[0]
 
     def _get_f_rpa(self, d, w, is_imaginary):
-        if is_imaginary:
-            return -2.0 * d / (d**2 + w**2)
-        else:
-            if np.abs(w) < 1e-12:
-                return -2.0 * d / (d**2 + self.eta**2)
-            else:
-                return (w - d) / ((w - d)**2 + self.eta**2) - (w + d) / ((w + d)**2 + self.eta**2)
+        return imaginary_frequency._f_rpa(self, d, w, is_imaginary)
 
     def build_casida_matrices(self, nocc, lBSE=False, W_aux=None, triplet=False):
         """
@@ -115,23 +120,23 @@ class LinearResponseSolver:
             nocc_a, nocc_b = nocc
             occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
             occ_b, virt_b = self._get_occ_virt_indices(self.eps_b, nocc_b)
-
+            
             nocc_a_val, nvirt_a_val = len(occ_a), len(virt_a)
             nocc_b_val, nvirt_b_val = len(occ_b), len(virt_b)
             n_pair_a = nocc_a_val * nvirt_a_val
             n_pair_b = nocc_b_val * nvirt_b_val
             n_pair = n_pair_a + n_pair_b
-
+            
             A = np.zeros((n_pair, n_pair))
             B = np.zeros((n_pair, n_pair))
-
+            
             if self.coeff_a is not None:
                 A_aa, B_aa = self._build_block_df(
-                    self.eps_a, occ_a, virt_a, lBSE, W_aux, factor=1.0,
+                    self.eps_a, occ_a, virt_a, lBSE, W_aux, factor=1.0, 
                     coeff_all=self.coeff_a, spin_channel='a'
                 )
                 A_bb, B_bb = self._build_block_df(
-                    self.eps_b, occ_b, virt_b, lBSE, W_aux, factor=1.0,
+                    self.eps_b, occ_b, virt_b, lBSE, W_aux, factor=1.0, 
                     coeff_all=self.coeff_b, spin_channel='b'
                 )
                 C_ov_a = self.coeff_a[:, occ_a[:, None], virt_a].reshape(self.naux, -1)
@@ -139,37 +144,37 @@ class LinearResponseSolver:
                 V_ab = C_ov_a.T @ C_ov_b
             else:
                 A_aa, B_aa = self._build_block_full(
-                    self.eps_a, occ_a, virt_a, lBSE, W_aux, factor=1.0,
+                    self.eps_a, occ_a, virt_a, lBSE, W_aux, factor=1.0, 
                     eri_all=self.eri_a, spin_channel='a', nocc=nocc
                 )
                 A_bb, B_bb = self._build_block_full(
-                    self.eps_b, occ_b, virt_b, lBSE, W_aux, factor=1.0,
+                    self.eps_b, occ_b, virt_b, lBSE, W_aux, factor=1.0, 
                     eri_all=self.eri_b, spin_channel='b', nocc=nocc
                 )
                 V_ab = self.eri_ab[np.ix_(occ_a, virt_a, occ_b, virt_b)].reshape(n_pair_a, n_pair_b)
-
+                
             A[:n_pair_a, :n_pair_a] = A_aa
             B[:n_pair_a, :n_pair_a] = B_aa
             A[n_pair_a:, n_pair_a:] = A_bb
             B[n_pair_a:, n_pair_a:] = B_bb
-
+            
             A[:n_pair_a, n_pair_a:] = V_ab
             A[n_pair_a:, :n_pair_a] = V_ab.T
             B[:n_pair_a, n_pair_a:] = V_ab
             B[n_pair_a:, :n_pair_a] = V_ab.T
-
+            
             return A, B
         else:
             occ, virt = self._get_occ_virt_indices(self.eps, nocc)
             factor = 0.0 if triplet else 2.0
             if self.df_coeff is not None:
                 A, B = self._build_block_df(
-                    self.eps, occ, virt, lBSE, W_aux, factor=factor,
+                    self.eps, occ, virt, lBSE, W_aux, factor=factor, 
                     coeff_all=self.df_coeff, spin_channel='restricted'
                 )
             else:
                 A, B = self._build_block_full(
-                    self.eps, occ, virt, lBSE, W_aux, factor=factor,
+                    self.eps, occ, virt, lBSE, W_aux, factor=factor, 
                     eri_all=self.eri_chemist, spin_channel='restricted', nocc=nocc
                 )
             return A, B
@@ -183,7 +188,7 @@ class LinearResponseSolver:
         """
         assert self.spin_mode == 'unrestricted', "Spin-flip Casida is only defined for unrestricted spin mode."
         nocc_a, nocc_b = nocc
-
+        
         if channel == 'ab':
             occ = np.arange(nocc_a)
             virt = np.arange(nocc_b, self.norb_b)
@@ -201,19 +206,19 @@ class LinearResponseSolver:
             coeff_virt = self.coeff_a
             # For ba channel, we use transposition on the full ERI blocks
             eri_channel = self.eri_ab
-
+            
         nocc_val = len(occ)
         nvirt_val = len(virt)
         n_pair = nocc_val * nvirt_val
-
+        
         diag_d = (eps_virt[virt][None, :] - eps_occ[occ][:, None]).ravel()
 
         B = np.zeros((n_pair, n_pair))
-
+        
         if coeff_occ is not None:
             C_oo_flat = coeff_occ[:, occ[:, None], occ].reshape(self.naux, -1)
             C_vv_flat = coeff_virt[:, virt[:, None], virt].reshape(self.naux, -1)
-
+            
             if not lBSE or W_aux is None:
                 V_exchange = (C_oo_flat.T @ C_vv_flat).reshape(nocc_val, nocc_val, nvirt_val, nvirt_val).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
                 A = np.diag(diag_d) - V_exchange
@@ -222,7 +227,7 @@ class LinearResponseSolver:
                 res = C_oo_flat.T @ tmp
                 W_exchange = res.reshape(nocc_val, nocc_val, nvirt_val, nvirt_val).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
                 A = np.diag(diag_d) - W_exchange
-
+                
             # Compute B for density fitting
             if self.df_ab is not None:
                 if channel == 'ab':
@@ -231,11 +236,17 @@ class LinearResponseSolver:
                 else:
                     # df_ab has indices (p, beta, alpha). So we need (p, occ_b, virt_a)
                     C_ov_sf = self.df_ab[:, occ, :][:, :, virt]
-
+                
+                # optimize= is NOT cosmetic here. Three operands without it run
+                # numpy's naive kernel at naux^2 n_ov^2 instead of contracting
+                # W_aux into one factor first, naux n_ov^2 + naux^2 n_ov -- 768x
+                # at naux 300 / n_ov 600, and the ratio grows linearly in naux.
                 if not lBSE or W_aux is None:
-                    B = - np.einsum('pib, pja -> iajb', C_ov_sf, C_ov_sf).reshape(n_pair, n_pair)
+                    B = - np.einsum('pib, pja -> iajb', C_ov_sf, C_ov_sf,
+                                    optimize=True).reshape(n_pair, n_pair)
                 else:
-                    B = - np.einsum('pib, pq, qja -> iajb', C_ov_sf, W_aux, C_ov_sf).reshape(n_pair, n_pair)
+                    B = - np.einsum('pib, pq, qja -> iajb', C_ov_sf, W_aux,
+                                    C_ov_sf, optimize=True).reshape(n_pair, n_pair)
         else:
             if channel == 'ab':
                 V_exch_raw = eri_channel[np.ix_(occ, occ, virt, virt)]
@@ -243,9 +254,9 @@ class LinearResponseSolver:
             else:
                 V_exch_raw = eri_channel[np.ix_(virt, virt, occ, occ)].transpose(2, 3, 0, 1)
                 V_b_raw = eri_channel[np.ix_(virt, occ, virt, occ)]
-
+                
             V_exchange = V_exch_raw.reshape(nocc_val, nocc_val, nvirt_val, nvirt_val).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
-
+            
             if not lBSE or W_aux is None:
                 A = np.diag(diag_d) - V_exchange
                 if channel == 'ab':
@@ -266,7 +277,7 @@ class LinearResponseSolver:
                     B = -W_b_raw.transpose(0, 3, 2, 1).reshape(n_pair, n_pair)
                 else:
                     B = -W_b_raw.transpose(1, 2, 3, 0).reshape(n_pair, n_pair)
-
+                
         return A, B
 
 
@@ -274,20 +285,20 @@ class LinearResponseSolver:
         nocc = len(occ)
         nvirt = len(virt)
         n_pair = nocc * nvirt
-
+        
         diag_d = (eps[virt][None, :] - eps[occ][:, None]).ravel()
 
         # Optimize indexing with 3D advanced indexing
         C_ov = coeff_all[:, occ[:, None], virt]
         C_ov_flat = C_ov.reshape(coeff_all.shape[0], n_pair)
-
+        
         V_iajb = C_ov_flat.T @ C_ov_flat
         V_iaswap = V_iajb.reshape(nocc, nvirt, nocc, nvirt).transpose(0, 3, 2, 1).reshape(n_pair, n_pair)
-
+        
         C_oo_flat = coeff_all[:, occ[:, None], occ].reshape(coeff_all.shape[0], nocc * nocc)
         C_vv_flat = coeff_all[:, virt[:, None], virt].reshape(coeff_all.shape[0], nvirt * nvirt)
         V_exchange = (C_oo_flat.T @ C_vv_flat).reshape(nocc, nocc, nvirt, nvirt).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
-
+        
         if not lBSE:
             A = np.diag(diag_d) + factor * V_iajb
             B = factor * V_iajb
@@ -298,14 +309,14 @@ class LinearResponseSolver:
                 tmp_dir = W_aux @ C_vv_flat
                 res_dir = C_oo_flat.T @ tmp_dir
                 W_direct_att = res_dir.reshape(nocc, nocc, nvirt, nvirt).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
-
+                
                 tmp_swap = W_aux @ C_ov_flat
                 res_swap = C_ov_flat.T @ tmp_swap
                 W_swap_att = res_swap.reshape(nocc, nvirt, nocc, nvirt).transpose(0, 3, 2, 1).reshape(n_pair, n_pair)
             else:
                 W_direct_att = V_exchange
                 W_swap_att = V_iaswap
-
+            
             A = np.diag(diag_d) + factor * V_iajb - W_direct_att
             B = factor * V_iajb - W_swap_att
             return A, B
@@ -314,17 +325,17 @@ class LinearResponseSolver:
         nocc_val = len(occ)
         nvirt_val = len(virt)
         n_pair = nocc_val * nvirt_val
-
+        
         diag_d = (eps[virt][None, :] - eps[occ][:, None]).ravel()
 
         # Optimize indexing with np.ix_
         V_iajb_4d = eri_all[np.ix_(occ, virt, occ, virt)]
         V_iajb = V_iajb_4d.reshape(n_pair, n_pair)
         V_iaswap = V_iajb_4d.transpose(0, 3, 2, 1).reshape(n_pair, n_pair)
-
+        
         V_exch_raw = eri_all[np.ix_(occ, occ, virt, virt)]
         V_exchange = V_exch_raw.reshape(nocc_val, nocc_val, nvirt_val, nvirt_val).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
-
+        
         if not lBSE:
             A = np.diag(diag_d) + factor * V_iajb
             B = factor * V_iajb
@@ -335,33 +346,33 @@ class LinearResponseSolver:
                     nocc_a, nocc_b = nocc
                     occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
                     occ_b, virt_b = self._get_occ_virt_indices(self.eps_b, nocc_b)
-
+                    
                     n_pair_a = len(occ_a) * len(virt_a)
                     n_pair_b = len(occ_b) * len(virt_b)
                     nvirt_a = len(virt_a)
                     nvirt_b = len(virt_b)
                     n_pair_tot = n_pair_a + n_pair_b
-
+                    
                     d_a = (self.eps_a[virt_a][None, :] - self.eps_a[occ_a][:, None]).ravel()
                     d_b = (self.eps_b[virt_b][None, :] - self.eps_b[occ_b][:, None]).ravel()
-
+                    
                     V_aa = self.eri_a[np.ix_(occ_a, virt_a, occ_a, virt_a)].reshape(n_pair_a, n_pair_a)
                     V_bb = self.eri_b[np.ix_(occ_b, virt_b, occ_b, virt_b)].reshape(n_pair_b, n_pair_b)
                     V_ab = self.eri_ab[np.ix_(occ_a, virt_a, occ_b, virt_b)].reshape(n_pair_a, n_pair_b)
-
+                    
                     V_trans = np.block([[V_aa, V_ab], [V_ab.T, V_bb]])
-
+                    
                     f_a = self._get_f_rpa(d_a, 0.0, is_imaginary=False)
                     f_b = self._get_f_rpa(d_b, 0.0, is_imaginary=False)
                     chi0_trans = np.diag(np.concatenate([f_a, f_b]))
-
+                    
                     chi_trans = chi0_trans @ np.linalg.inv(np.eye(n_pair_tot) - V_trans @ chi0_trans)
-
+                    
                     if spin_channel == 'a':
                         V_aa_ijkc = self.eri_a[np.ix_(occ_a, occ_a, occ_a, virt_a)].reshape(nocc_a*nocc_a, n_pair_a)
                         V_ab_ijkc = self.eri_ab[np.ix_(occ_a, occ_a, occ_b, virt_b)].reshape(nocc_a*nocc_a, n_pair_b)
                         V_ijkc_trans = np.block([V_aa_ijkc, V_ab_ijkc])
-
+                        
                         V_aa_abld = self.eri_a[np.ix_(virt_a, virt_a, occ_a, virt_a)].reshape(nvirt_a*nvirt_a, n_pair_a)
                         V_ab_abld = self.eri_ab[np.ix_(virt_a, virt_a, occ_b, virt_b)].reshape(nvirt_a*nvirt_a, n_pair_b)
                         V_abld_trans = np.block([V_aa_abld, V_ab_abld])
@@ -369,15 +380,15 @@ class LinearResponseSolver:
                         V_ba_ijkc = self.eri_ab[np.ix_(occ_a, virt_a, occ_b, occ_b)].reshape(n_pair_a, nocc_b*nocc_b).T
                         V_bb_ijkc = self.eri_b[np.ix_(occ_b, occ_b, occ_b, virt_b)].reshape(nocc_b*nocc_b, n_pair_b)
                         V_ijkc_trans = np.block([V_ba_ijkc, V_bb_ijkc])
-
+                        
                         V_ba_abld = self.eri_ab[np.ix_(occ_a, virt_a, virt_b, virt_b)].reshape(n_pair_a, nvirt_b*nvirt_b).T
                         V_bb_abld = self.eri_b[np.ix_(virt_b, virt_b, occ_b, virt_b)].reshape(nvirt_b*nvirt_b, n_pair_b)
                         V_abld_trans = np.block([V_ba_abld, V_bb_abld])
-
+                        
                     tmp = V_ijkc_trans @ chi_trans
                     W_minus_V_direct_raw = tmp @ V_abld_trans.T
                     W_direct_att = V_exchange + W_minus_V_direct_raw.reshape(nocc_val, nocc_val, nvirt_val, nvirt_val).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
-
+                    
                     if spin_channel == 'a':
                         W_swap_att_raw = W_aux[:n_pair, :n_pair]
                     else:
@@ -387,114 +398,42 @@ class LinearResponseSolver:
                     f = self._get_f_rpa(diag_d, 0.0, is_imaginary=False)
                     chi0 = np.diag(rpa_factor * f)
                     chi = chi0 @ np.linalg.inv(np.eye(n_pair) - V_iajb @ chi0)
-
+                    
                     V_ijkc = eri_all[np.ix_(occ, occ, occ, virt)]
                     V_abld = eri_all[np.ix_(virt, virt, occ, virt)]
-
+                    
                     tmp = V_ijkc.reshape(nocc_val*nocc_val, n_pair) @ chi
                     W_minus_V_direct_raw = tmp @ V_abld.reshape(nvirt_val*nvirt_val, n_pair).T
                     W_direct_att = V_exchange + W_minus_V_direct_raw.reshape(nocc_val, nocc_val, nvirt_val, nvirt_val).transpose(0, 2, 1, 3).reshape(n_pair, n_pair)
                     W_swap_att_raw = W_aux
-
+                
                 W_swap_att = W_swap_att_raw.reshape(nocc_val, nvirt_val, nocc_val, nvirt_val).transpose(0, 3, 2, 1).reshape(n_pair, n_pair)
             else:
                 W_direct_att = V_exchange
                 W_swap_att = V_iaswap
-
+            
             A = np.diag(diag_d) + factor * V_iajb - W_direct_att
             B = factor * V_iajb - W_swap_att
             return A, B
 
     def solve_rpa_screening(self, omega_grid, nocc, is_imaginary=False):
-        """Computes frequency-dependent screened potential W (dispatches to DF or full ERI version)."""
-        if (self.spin_mode == 'unrestricted' and self.coeff_a is not None) or (self.spin_mode != 'unrestricted' and self.df_coeff is not None):
-            return self.solve_rpa_screening_df(omega_grid, nocc, is_imaginary)
-        else:
-            return self.solve_rpa_screening_full(omega_grid, nocc, is_imaginary)
+        """W(omega) by direct particle-hole summation -- route 2 of three.
+
+        Implementation lives in `imaginary_frequency.py`, which documents how
+        this route relates to the Casida (route 1) and imaginary-time (route 3)
+        constructions of the same object.
+        """
+        return imaginary_frequency.solve_rpa_screening(self, omega_grid, nocc, is_imaginary)
 
     def solve_rpa_screening_df(self, omega_grid, nocc, is_imaginary=False):
-        """Computes frequency-dependent screened potential W using density fitting."""
-        if self.spin_mode == 'unrestricted':
-            nocc_a, nocc_b = nocc
-            occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
-            occ_b, virt_b = self._get_occ_virt_indices(self.eps_b, nocc_b)
-
-            d_a = (self.eps_a[virt_a][None, :] - self.eps_a[occ_a][:, None]).ravel()
-            d_b = (self.eps_b[virt_b][None, :] - self.eps_b[occ_b][:, None]).ravel()
-
-            C_ov_a = self.coeff_a[:, occ_a[:, None], virt_a].reshape(self.naux, -1)
-            C_ov_b = self.coeff_b[:, occ_b[:, None], virt_b].reshape(self.naux, -1)
-
-            W_grid = []
-            for w in omega_grid:
-                f_a = self._get_f_rpa(d_a, w, is_imaginary)
-                f_b = self._get_f_rpa(d_b, w, is_imaginary)
-                chi0 = (C_ov_a * f_a) @ C_ov_a.T + (C_ov_b * f_b) @ C_ov_b.T
-                W_w = np.linalg.inv(np.eye(self.naux) - chi0)
-                W_grid.append(W_w)
-            return np.array(W_grid)
-        else:
-            occ, virt = self._get_occ_virt_indices(self.eps, nocc)
-            d = (self.eps[virt][None, :] - self.eps[occ][:, None]).ravel()
-            C_ov = self.df_coeff[:, occ[:, None], virt].reshape(self.naux, -1)
-            W_grid = []
-            for w in omega_grid:
-                f = self._get_f_rpa(d, w, is_imaginary)
-                chi0 = 2.0 * (C_ov * f) @ C_ov.T
-                W_w = np.linalg.inv(np.eye(self.naux) - chi0)
-                W_grid.append(W_w)
-            return np.array(W_grid)
+        return imaginary_frequency.solve_rpa_screening_df(self, omega_grid, nocc, is_imaginary)
 
     def solve_rpa_screening_full(self, omega_grid, nocc, is_imaginary=False):
-        """Computes frequency-dependent screened potential W using full ERIs."""
-        if self.spin_mode == 'unrestricted':
-            nocc_a, nocc_b = nocc
-            occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
-            occ_b, virt_b = self._get_occ_virt_indices(self.eps_b, nocc_b)
-
-            nocc_a_val, nvirt_a_val = len(occ_a), len(virt_a)
-            nocc_b_val, nvirt_b_val = len(occ_b), len(virt_b)
-            n_pair_a = nocc_a_val * nvirt_a_val
-            n_pair_b = nocc_b_val * nvirt_b_val
-            n_pair = n_pair_a + n_pair_b
-
-            d_a = (self.eps_a[virt_a][None, :] - self.eps_a[occ_a][:, None]).ravel()
-            d_b = (self.eps_b[virt_b][None, :] - self.eps_b[occ_b][:, None]).ravel()
-
-            # Optimized indexing with np.ix_
-            V_aa = self.eri_a[np.ix_(occ_a, virt_a, occ_a, virt_a)].reshape(n_pair_a, n_pair_a)
-            V_bb = self.eri_b[np.ix_(occ_b, virt_b, occ_b, virt_b)].reshape(n_pair_b, n_pair_b)
-            V_ab = self.eri_ab[np.ix_(occ_a, virt_a, occ_b, virt_b)].reshape(n_pair_a, n_pair_b)
-
-            V_trans = np.block([[V_aa, V_ab], [V_ab.T, V_bb]])
-
-            W_grid = []
-            for w in omega_grid:
-                f_a = self._get_f_rpa(d_a, w, is_imaginary)
-                f_b = self._get_f_rpa(d_b, w, is_imaginary)
-                chi0_trans = np.diag(np.concatenate([f_a, f_b]))
-                W_w = V_trans @ np.linalg.inv(np.eye(n_pair) - chi0_trans @ V_trans)
-                W_grid.append(W_w)
-            return np.array(W_grid)
-        else:
-            occ, virt = self._get_occ_virt_indices(self.eps, nocc)
-            n_pair = len(occ) * len(virt)
-            d = (self.eps[virt][None, :] - self.eps[occ][:, None]).ravel()
-
-            # Optimized indexing with np.ix_
-            V_trans = self.eri_chemist[np.ix_(occ, virt, occ, virt)].reshape(n_pair, n_pair)
-
-            W_grid = []
-            for w in omega_grid:
-                f = self._get_f_rpa(d, w, is_imaginary)
-                chi0_trans = np.diag(2.0 * f)
-                W_w = V_trans @ np.linalg.inv(np.eye(n_pair) - chi0_trans @ V_trans)
-                W_grid.append(W_w)
-            return np.array(W_grid)
+        return imaginary_frequency.solve_rpa_screening_full(self, omega_grid, nocc, is_imaginary)
 
     def solve_rpa_spectral(self, omega_grid, nocc, eigenvalues_casida, X_plus_Y, is_imaginary=False):
         """Spectral representation of screened potential W (dispatches to DF or full ERI version)."""
-        if (self.spin_mode == 'unrestricted' and self.coeff_a is not None) or (self.spin_mode != 'unrestricted' and self.df_coeff is not None):
+        if (self.spin_mode == 'unrestricted' and self.coeff_a is not None) or (self.spin_mode != 'unrestricted' and (self.df_coeff is not None or self.coeff_ov is not None)):
             return self.solve_rpa_spectral_df(omega_grid, nocc, eigenvalues_casida, X_plus_Y, is_imaginary)
         else:
             return self.solve_rpa_spectral_full(omega_grid, nocc, eigenvalues_casida, X_plus_Y, is_imaginary)
@@ -505,11 +444,11 @@ class LinearResponseSolver:
             nocc_a, nocc_b = nocc
             occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
             occ_b, virt_b = self._get_occ_virt_indices(self.eps_b, nocc_b)
-
+            
             C_ov_a = self.coeff_a[:, occ_a[:, None], virt_a].reshape(self.naux, -1)
             C_ov_b = self.coeff_b[:, occ_b[:, None], virt_b].reshape(self.naux, -1)
             XplusY_proj = np.block([[C_ov_a, C_ov_b]]) @ X_plus_Y
-
+            
             prefactor = 1.0
             W_grid = []
             for w in omega_grid:
@@ -524,7 +463,7 @@ class LinearResponseSolver:
             occ, virt = self._get_occ_virt_indices(self.eps, nocc)
             C_ov = self.df_coeff[:, occ[:, None], virt].reshape(self.naux, -1)
             XplusY_proj = C_ov @ X_plus_Y
-
+            
             prefactor = 2.0
             W_grid = []
             for w in omega_grid:
@@ -542,18 +481,18 @@ class LinearResponseSolver:
             nocc_a, nocc_b = nocc
             occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
             occ_b, virt_b = self._get_occ_virt_indices(self.eps_b, nocc_b)
-
+            
             nocc_a_val, nvirt_a_val = len(occ_a), len(virt_a)
             nocc_b_val, nvirt_b_val = len(occ_b), len(virt_b)
             n_pair_a = nocc_a_val * nvirt_a_val
             n_pair_b = nocc_b_val * nvirt_b_val
-
+            
             # Optimized indexing with np.ix_
             V_aa = self.eri_a[np.ix_(occ_a, virt_a, occ_a, virt_a)].reshape(n_pair_a, n_pair_a)
             V_bb = self.eri_b[np.ix_(occ_b, virt_b, occ_b, virt_b)].reshape(n_pair_b, n_pair_b)
             V_ab = self.eri_ab[np.ix_(occ_a, virt_a, occ_b, virt_b)].reshape(n_pair_a, n_pair_b)
             V_trans = np.block([[V_aa, V_ab], [V_ab.T, V_bb]])
-
+            
             prefactor = 1.0
             W_grid = []
             for w in omega_grid:

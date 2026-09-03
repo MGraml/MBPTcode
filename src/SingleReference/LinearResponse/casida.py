@@ -47,8 +47,14 @@ class CasidaSolver:
         ApB = self.A + self.B
         AmB = self.A - self.B
 
-        # Check if A-B is diagonal: only check off-diagonal norm
-        offdiag_norm = np.linalg.norm(AmB - np.diag(np.diag(AmB)))
+        # Check if A-B is diagonal: only check off-diagonal norm.
+        # Computed from the Frobenius norms rather than by forming
+        # AmB - diag(diag(AmB)), which allocates a whole extra n_ov x n_ov array
+        # purely to be normed and discarded -- 50 GB at hexacene/cc-pVTZ, where
+        # the solve is already memory-bound. Identical value to 1e-8 relative.
+        diag_AmB_full = np.diag(AmB)
+        offdiag_sq = (np.linalg.norm(AmB)**2 - np.linalg.norm(diag_AmB_full)**2)
+        offdiag_norm = np.sqrt(max(offdiag_sq, 0.0))
         is_AmB_diag = offdiag_norm < self.eta * self.ndim
 
         global_N = self.ndim
@@ -59,16 +65,22 @@ class CasidaSolver:
             diag_AmB = np.clip(diag_AmB, self.eta, None)
             sqrt_AmB_diag = np.sqrt(diag_AmB)
             inv_sqrt_AmB_diag = 1.0 / sqrt_AmB_diag
-
-            # Target matrix: (A-B)^{1/2} (A+B) (A-B)^{1/2}
-            M = ApB * sqrt_AmB_diag[:, None] * sqrt_AmB_diag[None, :]
-
+            
+            # Target matrix: (A-B)^{1/2} (A+B) (A-B)^{1/2}, formed IN PLACE in
+            # ApB's buffer. ApB is dead after this line in this branch, and the
+            # out-of-place form costs two further n_ov x n_ov temporaries (one
+            # per multiply) on top of the result -- at hexacene/cc-pVTZ that is
+            # the difference between ~220 GB and ~270 GB on a 252 GB node.
+            M = ApB
+            M *= sqrt_AmB_diag[:, None]
+            M *= sqrt_AmB_diag[None, :]
+            
             # Perform diagonalization via backend
             omega2, Z_res, is_distributed, solver, comm = diagonalize_matrix(M, threshold=threshold)
-
+                
             omega2 = np.clip(omega2, self.eta**2, None)
             omega = np.sqrt(omega2)
-
+            
             if is_distributed:
                 # Gather, back-transform globally, and scatter back
                 Z_full = gather_block_cyclic(Z_res, global_N, solver, comm)
@@ -99,13 +111,13 @@ class CasidaSolver:
                 L = la.cholesky(ApB + shift * np.eye(self.ndim), lower=True)
 
             M = L.conj().T @ (AmB @ L)
-
+            
             # Perform diagonalization via backend
             omega2, Z_res, is_distributed, solver, comm = diagonalize_matrix(M, threshold=threshold)
-
+                
             omega2 = np.clip(omega2, self.eta**2, None)
             omega = np.sqrt(omega2)
-
+            
             if is_distributed:
                 # Gather, back-transform globally, and scatter back
                 Z_full = gather_block_cyclic(Z_res, global_N, solver, comm)
@@ -129,6 +141,6 @@ class CasidaSolver:
                 X = 0.5 * (X_plus_Y + X_minus_Y)
                 Y = 0.5 * (X_plus_Y - X_minus_Y)
                 self.Z = Z_res
-
+                
         self.is_distributed = is_distributed
         return CasidaResult(omega, X, Y, is_distributed)
