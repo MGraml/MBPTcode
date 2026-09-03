@@ -1,8 +1,7 @@
 """
-Validates src/Base/utils/grids.py::minimax_time_grid (GreenX minimax imaginary-time
-grid, parsed by tools/parse_minimax_tau.py from
-greenX/GX-TimeFrequency/src/minimax_tau.F90) by checking the Laplace-transform
-identity it exists to provide:
+Validates src/Base/utils/grids.py::minimax_time_grid (the GreenX minimax
+imaginary-time grid, tabulated in src/Base/utils/minimax_tau_data.json) by
+checking the Laplace-transform identity it exists to provide:
 
     1/x ~= sum_k w_k * exp(-x * tau_k)      for x in [e_min, e_max]
 

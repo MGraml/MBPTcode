@@ -1,8 +1,16 @@
-"""Quadrature grids: Gauss-Legendre, gap-scaled, and minimax frequency/time.
+"""Imaginary-axis quadrature grids: minimax (tabulated) and Gauss-Legendre.
 
-The minimax grid tables in minimax_omega_data.json and minimax_tau_data.json
-are derived from the GreenX library (https://github.com/nomad-coe/greenX),
-which is distributed under the Apache License 2.0.
+The minimax grids are lookups, not on-the-fly optimizations: a dimensionless
+table entry per (grid size, energy range) bin, rescaled by e_min. That is why
+only certain sizes exist -- see `minimax_supported_sizes()`.
+
+References
+----------
+Kaltak, Klimes and Kresse, J. Chem. Theory Comput. 10, 2498 (2014) -- the
+minimax imaginary-time and imaginary-frequency quadratures themselves.
+The coefficient tables in minimax_omega_data.json / minimax_tau_data.json are
+derived from the GreenX library (Apache-2.0; see NOTICE), whose
+GX-TimeFrequency/src/minimax_omega.F90 and minimax_tau.F90 generate them.
 """
 import json
 import os
@@ -41,14 +49,41 @@ def minimax_tau_supported_sizes():
     return sorted(int(k) for k in _load_minimax_tau_data())
 
 
+def _require_positive_e_min(e_min, e_max, who):
+    """Reject a non-positive smallest transition energy.
+
+    Every grid in this module is a T = 0 construction scaled by e_min, the
+    HOMO-LUMO gap. A metal has no gap, and the failures are silent: a tiny gap
+    collapses the grid toward omega = 0, a numerically inverted (degenerate)
+    Fermi level gives NEGATIVE frequency points and negative weights, and an
+    exactly zero gap divides by zero. None of those announce themselves.
+
+    At finite temperature the low-energy scale is the temperature, not the gap:
+    pass e_min = utils.matsubara.thermal_e_min(beta, gap) instead, or use the
+    intermediate representation there, which has no gap in its construction.
+    """
+    if not e_min > 0:
+        raise ValueError(
+            f"{who}: e_min = {e_min:.6g} is not positive, so this T=0 grid is "
+            f"undefined. It is scaled by the smallest transition energy (the "
+            f"gap), which vanishes for a metal and can come out negative for a "
+            f"degenerate Fermi level. Use "
+            f"src.Base.utils.matsubara.thermal_e_min(beta, gap) to set e_min "
+            f"from the temperature, or the IRBasis there, which needs no gap.")
+    if e_max is not None and not e_max > e_min:
+        raise ValueError(
+            f"{who}: e_max = {e_max:.6g} must exceed e_min = {e_min:.6g}")
+
+
 def minimax_frequency_grid(nfreq, e_min, e_max):
-    """Minimax imaginary-frequency grid, from tabulated GreenX coefficients (greenX/GX-TimeFrequency/src/minimax_omega.F90).
+    """Minimax imaginary-frequency grid, from GreenX coefficients tabulated in minimax_omega_data.json (GreenX: GX-TimeFrequency/src/minimax_omega.F90).
 
     A lookup (Remez-exchange-optimized table per grid_size/energy_range bin),
     not an on-the-fly optimization; dimensionless table entries rescaled by e_min.
     e_min/e_max: smallest/largest orbital-energy transition. Prefer this over
     gauss_legendre_grid where nfreq is in minimax_supported_sizes().
     """
+    _require_positive_e_min(e_min, e_max, 'minimax_frequency_grid')
     data = _load_minimax_data()
     key = str(nfreq)
     if key not in data:
@@ -83,9 +118,9 @@ def minimax_frequency_grid(nfreq, e_min, e_max):
 def minimax_time_grid(ntau, e_min, e_max):
     """Minimax imaginary-time grid (tau_k, w_k) s.t. 1/x ~= sum_k w_k*exp(-x*tau_k)
     for x in [e_min, e_max], from tabulated GreenX coefficients
-    (greenX/GX-TimeFrequency/src/minimax_tau.F90, "Laplace-transformed direct
-    MP2" grids -- same table layout/lookup as minimax_frequency_grid, parsed
-    by tools/parse_minimax_tau.py into minimax_tau_data.json).
+    tabulated in minimax_tau_data.json (GreenX: GX-TimeFrequency/src/minimax_tau.F90,
+    the "Laplace-transformed direct MP2" grids -- same table layout and lookup
+    as minimax_frequency_grid).
 
     Rescaling is the INVERSE of minimax_frequency_grid's: the tabulated data is
     for a dimensionless problem with e_min=1 (energies rescaled by e_min), but
@@ -94,6 +129,7 @@ def minimax_time_grid(ntau, e_min, e_max):
     multiplying -- verified numerically in tests/test_minimax_tau_grid.py by
     checking sum(w_k*exp(-x*tau_k)) reproduces 1/x directly.
     """
+    _require_positive_e_min(e_min, e_max, 'minimax_time_grid')
     data = _load_minimax_tau_data()
     key = str(ntau)
     if key not in data:
@@ -130,6 +166,7 @@ def gauss_legendre_grid(nfreq, w0=0.5):
 
     w0 sets the grid's characteristic energy scale; see gap_scaled_w0 for a system-specific choice.
     """
+    _require_positive_e_min(w0, None, 'gauss_legendre_grid (w0)')
     x, w = np.polynomial.legendre.leggauss(nfreq)
     freq_weight = w0 * 2.0 * w / (1.0 - x)**2
     freq_point = w0 * (1.0 + x) / (1.0 - x)
@@ -137,5 +174,12 @@ def gauss_legendre_grid(nfreq, w0=0.5):
 
 
 def gap_scaled_w0(eps, nocc, scale=0.5):
-    """w0 = scale * (eps_LUMO - eps_HOMO): scales the grid to the gap instead of using one fixed w0 for every system."""
-    return scale * (eps[nocc] - eps[nocc - 1])
+    """w0 = scale * (eps_LUMO - eps_HOMO): scales the grid to the gap instead of using one fixed w0 for every system.
+
+    Raises for a vanishing or inverted gap rather than returning a w0 that
+    would silently collapse the grid -- see _require_positive_e_min, and
+    utils.matsubara for the finite-temperature replacement.
+    """
+    w0 = scale * (eps[nocc] - eps[nocc - 1])
+    _require_positive_e_min(w0, None, 'gap_scaled_w0')
+    return w0

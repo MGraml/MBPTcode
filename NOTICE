@@ -33,3 +33,14 @@ Licensed under the Apache License, Version 2.0.
   * src/Base/utils/minimax_tau_data.json
     Minimax quadrature grid tables derived from the GreenX library, loaded
     by src/Base/utils/grids.py.
+
+  * src/Base/utils/time_frequency.py
+    Python port of the imaginary time <-> imaginary frequency transformation
+    weights from GreenX's GX-TimeFrequency/src/minimax_grids.F90, namely the
+    routines get_transformation_weights and calculate_psi_and_mat_A, together
+    with the transformation-type codes of minimax_utils.F90. Modifications:
+    reorganized as a single grid object carrying both axes and all four
+    transform matrices; Tikhonov regularization applied automatically above
+    20 points; a finite-temperature (IR) backend added behind the same
+    interface, which is not GreenX-derived. The per-point regularized
+    least-squares fit and its target function follow the original.
