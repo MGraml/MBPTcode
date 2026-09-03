@@ -7,6 +7,7 @@ from src.SingleReference.EpsteinNesbet import (_build_dressed_e_ai, _build_dress
                                                 restricted_channel_shifts)
 from src.Base.pyscf_interface import get_orbital_energies, get_two_electron_integrals_chemist, get_antisymmetrized_spin_eri
 from src.Base.pyscf_interface import uhf_blockstacked_order
+from src.Base.solvent_screening import solvent_static_selfenergy
 from src.SingleReference.DensityMatrix.density_matrix import (
     semicanonicalize_restricted,
     t1_singles_blocks,
@@ -1011,9 +1012,46 @@ def build_ks_static_correction_restricted(mf, mol=None, dm=None):
     return _ks_hx_hxc_correction_restricted(mf, mol, dm)
 
 
+def build_solvent_static_correction(mf, mol=None):
+    """Spin-orbital static COHSEX reaction-field correction to Sigma(infinity)
+    for a mean field carrying a solvent screening, else None.
+
+    Same packing conventions as build_ks_static_correction (RHF/RKS:
+    interleaved (2*nmo, 2*nmo); UHF/UKS: block-stacked), and additive with it
+    and with the Delta_gamma term for the same reason -- these are disjoint
+    pieces of Sigma(infinity). This one is first order in the reaction field
+    vtilde and carries essentially all of the solvation shift; the
+    v -> v + vtilde substitution in the integrals themselves only reaches
+    order vtilde*v. See SolventScreening.cohsex_correction.
+    """
+    corr = solvent_static_selfenergy(mf, mol)
+    if corr is None:
+        return None
+    if isinstance(corr, tuple):
+        corr_a, corr_b = corr
+        nocc_a, nocc_b = mf.nelec
+        return _uhf_dgamma_to_spin_blockstacked(corr_a, corr_b, nocc_a, nocc_b,
+                                                corr_a.shape[0], corr_b.shape[0])
+    nmo = corr.shape[0]
+    corr_spin = np.zeros((2 * nmo, 2 * nmo))
+    corr_spin[0::2, 0::2] = corr
+    corr_spin[1::2, 1::2] = corr
+    return corr_spin
+
+
+def build_solvent_static_correction_restricted(mf, mol=None):
+    """Restricted (spatial-MO) counterpart of build_solvent_static_correction."""
+    corr = solvent_static_selfenergy(mf, mol)
+    if isinstance(corr, tuple):
+        raise NotImplementedError(
+            "build_solvent_static_correction_restricted is RHF-only -- use "
+            "build_solvent_static_correction (spin-orbital) for UHF.")
+    return corr
 
 
 def _add_ks(base, ks):
+    """Fold an additive, non-overlapping Sigma(infinity) piece (the KS
+    double-counting term, the solvent reaction field) into `base`."""
     if ks is None:
         return base
     return ks if base is None else base + ks
@@ -1121,7 +1159,8 @@ def build_static_correction(mf, mol=None, kind='mp2_relaxed', en_dress=None,
             base = build_ccsd_static_correction_restricted(mf, mol, ncore=ncore)
         else:
             base = build_ccsdt_static_correction_restricted(mf, mol)
-        return _add_ks(base, build_ks_static_correction_restricted(mf, mol))
+        base = _add_ks(base, build_ks_static_correction_restricted(mf, mol))
+        return _add_ks(base, build_solvent_static_correction_restricted(mf, mol))
 
     if is_uhf and kind == 'ccsdt':
         raise NotImplementedError(
@@ -1149,7 +1188,8 @@ def build_static_correction(mf, mol=None, kind='mp2_relaxed', en_dress=None,
             mf, mol, B_spin, relax=relax, u2_denom_dress=en_dress,
             cphf_level_shift=cphf_level_shift, cphf_max_cycle=cphf_max_cycle,
             cphf_tol=cphf_tol)
-        return _add_ks(base, build_ks_static_correction(mf, mol))
+        base = _add_ks(base, build_ks_static_correction(mf, mol))
+        return _add_ks(base, build_solvent_static_correction(mf, mol))
 
     if kind is None:
         base = None
@@ -1166,4 +1206,5 @@ def build_static_correction(mf, mol=None, kind='mp2_relaxed', en_dress=None,
         base = build_ccsd_static_correction(mf, mol, ncore=ncore)
     else:
         base = build_ccsdt_static_correction(mf, mol)
-    return _add_ks(base, build_ks_static_correction(mf, mol))
+    base = _add_ks(base, build_ks_static_correction(mf, mol))
+    return _add_ks(base, build_solvent_static_correction(mf, mol))

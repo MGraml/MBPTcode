@@ -42,4 +42,5 @@ from src.SingleReference.ADC.static_correction import (
     build_ccsd_static_correction, build_ccsd_static_correction_restricted,
     build_ccsdt_static_correction, build_ccsdt_static_correction_restricted,
     build_ks_static_correction, build_ks_static_correction_restricted,
+    build_solvent_static_correction, build_solvent_static_correction_restricted,
 )
