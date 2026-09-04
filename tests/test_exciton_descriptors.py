@@ -78,6 +78,18 @@ def main():
     ok &= check(abs(d['d_eh'][0] - d_eh) < TOL, 'd_eh = |<a|r|a> - <i|r|i>|')
     ok &= check(abs(d['d_exc'][0] - np.sqrt(d_eh**2 + sig_e**2 + sig_h**2)) < TOL,
                 'd_exc^2 = d_eh^2 + sigma_e^2 + sigma_h^2')
+    sig_e_dir = np.sqrt(big_m[:, a, a] - r_e**2)
+    sig_h_dir = np.sqrt(big_m[:, i, i] - r_h**2)
+    ok &= check(np.abs(d['d_eh_dir'][0] - np.abs(r_h - r_e)).max() < TOL
+                and np.abs(d['sigma_e_dir'][0] - sig_e_dir).max() < TOL
+                and np.abs(d['sigma_h_dir'][0] - sig_h_dir).max() < TOL,
+                'directional d_eh, sigma_e, sigma_h are the per-component moments')
+    ok &= check(np.abs(d['cov_eh_mat'][0]).max() < TOL
+                and np.abs(d['R_eh_mat'][0]).max() < TOL,
+                'covariance and correlation matrices vanish for a product state')
+    d_exc_dir = np.sqrt((r_h - r_e)**2 + sig_e_dir**2 + sig_h_dir**2)
+    ok &= check(np.abs(d['d_exc_dir'][0] - d_exc_dir).max() < TOL,
+                'directional d_exc from the per-component pieces')
 
     print('\n=== 2. one X_ia and one Y_jb: Y term and X-Y cross term ===')
     j, b = nocc - 2, nocc
@@ -101,15 +113,38 @@ def main():
     sig_e = np.sqrt(r_e2.sum() - r_e @ r_e)
     d_eh = np.linalg.norm(r_h - r_e)
     ok &= check(abs(d['c_n'][0] - c) < TOL, 'c_n = x^2 + y^2')
-    ok &= check(np.abs(d['r_h'][0] - r_h).max() < TOL, '<r_h> mixes <i|r|i> and <b|r|b>')
-    ok &= check(np.abs(d['r_e'][0] - r_e).max() < TOL, '<r_e> mixes <a|r|a> and <j|r|j>')
-    ok &= check(abs(d['sigma_h'][0] - sig_h) < TOL and abs(d['sigma_e'][0] - sig_e) < TOL,
+    ok &= check(np.abs(d['r_h'][0] - r_h).max() < TOL,
+                '<r_h> mixes <i|r|i> and <b|r|b>')
+    ok &= check(np.abs(d['r_e'][0] - r_e).max() < TOL,
+                '<r_e> mixes <a|r|a> and <j|r|j>')
+    ok &= check(abs(d['sigma_h'][0] - sig_h) < TOL
+                and abs(d['sigma_e'][0] - sig_e) < TOL,
                 'sigma_e, sigma_h with both terms')
     ok &= check(abs(d['cov_eh'][0] - cov) < TOL,
                 'COV_eh carries the X-Y cross term 2xy <a|r|j><i|r|b>')
-    ok &= check(abs(d['R_eh'][0] - cov / (sig_e * sig_h)) < TOL, 'R_eh = COV/(sigma_e sigma_h)')
-    ok &= check(abs(d['d_exc'][0] - np.sqrt(d_eh**2 + sig_e**2 + sig_h**2 - 2 * cov)) < TOL,
-                'd_exc from the four pieces')
+    ok &= check(abs(d['R_eh'][0] - cov / (sig_e * sig_h)) < TOL,
+                'R_eh = COV/(sigma_e sigma_h)')
+    d_exc = np.sqrt(d_eh**2 + sig_e**2 + sig_h**2 - 2 * cov)
+    ok &= check(abs(d['d_exc'][0] - d_exc) < TOL, 'd_exc from the four pieces')
+    # full <r_e^x r_h^y>: electron component on <a|.|a>, <j|.|j>, <a|.|j>; hole
+    # component on <i|.|i>, <b|.|b>, <i|.|b>
+    r_eh_mat = (x * x * np.outer(mu[:, a, a], mu[:, i, i])
+                + y * y * np.outer(mu[:, j, j], mu[:, b, b])
+                + x * y * (np.outer(mu[:, a, j], mu[:, i, b])
+                           + np.outer(mu[:, i, b], mu[:, a, j]))) / c
+    cov_mat = r_eh_mat - np.outer(r_e, r_h)
+    sig_e_dir = np.sqrt(r_e2 - r_e**2)
+    sig_h_dir = np.sqrt(r_h2 - r_h**2)
+    ok &= check(np.abs(d['cov_eh_mat'][0] - cov_mat).max() < TOL,
+                'covariance matrix, electron component first, with the cross term')
+    r_mat = cov_mat / np.outer(sig_e_dir, sig_h_dir)
+    ok &= check(np.abs(d['R_eh_mat'][0] - r_mat).max() < TOL,
+                'correlation matrix = cov / (sigma_e^x sigma_h^y)')
+    ok &= check(abs(np.trace(d['cov_eh_mat'][0]) - d['cov_eh'][0]) < TOL
+                and abs((d['sigma_e_dir'][0]**2).sum() - d['sigma_e'][0]**2) < TOL
+                and abs((d['d_exc_dir'][0]**2).sum() - d['d_exc'][0]**2) < TOL
+                and abs(np.linalg.norm(d['d_eh_dir'][0]) - d['d_eh'][0]) < TOL,
+                'directional pieces sum back to the scalar descriptors')
 
     print('\n=== 3. centrosymmetric molecule, real Casida vectors ===')
     mol2 = gto.M(atom='N 0 0 -0.549; N 0 0 0.549', basis='6-31g', verbose=0)
@@ -125,7 +160,8 @@ def main():
     d = exciton_descriptors(mf2, mol2, nocc2, X2, Y2)
     ok &= check(np.abs(d['d_eh']).max() < 1e-8, 'd_eh = 0 for every root of N2',
                 f'max {np.abs(d["d_eh"]).max():.1e} bohr')
-    ok &= check(np.abs(d['c_n'] - 1.0 - 2.0 * np.einsum('pn,pn->n', Y2, Y2)).max() < TOL,
+    yy = np.einsum('pn,pn->n', Y2, Y2)
+    ok &= check(np.abs(d['c_n'] - 1.0 - 2.0 * yy).max() < TOL,
                 'c_n = 1 + 2 Y^T Y with the X^T X - Y^T Y = 1 normalization')
     d_tda = exciton_descriptors(mf2, mol2, nocc2, X2, np.zeros_like(Y2))
     ok &= check(np.all(d_tda['sigma_e'] > 0) and np.all(d['d_exc'] > 0),
@@ -143,13 +179,15 @@ def main():
     omega, Xd, Yd = CasidaSolver(A, B).solve()
     order = np.argsort(omega)[:3]
     dense = exciton_descriptors(mf_df, mol, nocc, Xd[:, order], Yd[:, order])
-    om_dav, X_dav, Y_dav = solve_casida_davidson(lr, nocc, nroots=3, polarizability='RPA',
-                                                 conv_tol=1e-8)
+    om_dav, X_dav, Y_dav = solve_casida_davidson(lr, nocc, nroots=3,
+                                                 polarizability='RPA', conv_tol=1e-8)
     order = np.argsort(om_dav)
     dav = exciton_descriptors(mf_df, mol, nocc, X_dav[:, order], Y_dav[:, order])
     worst = max(np.abs(dav[k] - dense[k]).max() for k in ('d_eh', 'sigma_e', 'sigma_h',
-                                                          'd_exc', 'R_eh', 'c_n'))
-    ok &= check(worst < 1e-5, 'Davidson and dense (X, Y) agree on every descriptor, 3 roots',
+                                                          'd_exc', 'R_eh', 'c_n',
+                                                          'd_exc_dir', 'cov_eh_mat'))
+    ok &= check(worst < 1e-5,
+                'Davidson and dense (X, Y) agree on every descriptor, 3 roots',
                 f'max |d| {worst:.1e}')
 
     print('\n=== 5. unrestricted reference is refused ===')
@@ -161,7 +199,8 @@ def main():
         raised = True
     ok &= check(raised, 'UHF mean field raises NotImplementedError')
 
-    print('\n' + ('All exciton descriptor checks passed.' if ok else 'FAILURES DETECTED'))
+    print('\n' + ('All exciton descriptor checks passed.' if ok
+                  else 'FAILURES DETECTED'))
     return 0 if ok else 1
 
 

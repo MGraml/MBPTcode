@@ -34,6 +34,12 @@ def exciton_descriptors(mf, mol, nocc, X, Y):
         'cov_eh'  shape (nroots,)    sum_mu <r_e^mu r_h^mu> - <r_e^mu><r_h^mu>
         'R_eh'    shape (nroots,)    cov_eh / (sigma_e sigma_h), correlation
         'd_exc'   shape (nroots,)    sqrt(<|r_h - r_e|^2>), size of the excitation
+      and the same projected on the Cartesian components, index (n, x):
+        'd_eh_dir', 'sigma_e_dir', 'sigma_h_dir', 'd_exc_dir', 'R_eh_dir'
+                  shape (nroots, 3)
+        'cov_eh_mat' shape (nroots, 3, 3)  <r_e^x r_h^y> - <r_e^x><r_h^y>,
+                  index (n, x, y), x the electron and y the hole component
+        'R_eh_mat'   shape (nroots, 3, 3)  cov_eh_mat / (sigma_e^x sigma_h^y)
 
     Notes
     -----
@@ -61,6 +67,13 @@ def exciton_descriptors(mf, mol, nocc, X, Y):
         COV_eh = Σ_µ ⟨r_e^µ r_h^µ⟩ - ⟨r_e^µ⟩⟨r_h^µ⟩,   R_eh = COV_eh / (σ_e σ_h)
         d_exc  = √⟨|r_h - r_e|²⟩ = √(d_eh² + σ_e² + σ_h² - 2 COV_eh).
 
+    The directional descriptors project the same moments on one Cartesian
+    component x: σ_e^x = √(⟨x_e²⟩ - ⟨x_e⟩²), d_eh^x = |⟨x_h⟩ - ⟨x_e⟩|,
+    d_exc^x = √⟨(x_h - x_e)²⟩ and R_eh^x = COV_eh^xx / (σ_e^x σ_h^x), with
+    COV_eh^xy = ⟨r_e^x r_h^y⟩ - ⟨r_e^x⟩⟨r_h^y⟩ the full covariance. The totals are
+    the quadrature sums, σ_e² = Σ_x (σ_e^x)², d_exc² = Σ_x (d_exc^x)², and
+    COV_eh = Σ_x COV_eh^xx.
+
     d_eh, σ_e, σ_h, COV_eh, R_eh and d_exc are origin independent; ⟨r_e⟩ and
     ⟨r_h⟩ are reported relative to the coordinate origin of `mol`. The
     contraction order follows CP2K's `get_exciton_descriptors`
@@ -70,7 +83,7 @@ def exciton_descriptors(mf, mol, nocc, X, Y):
     ----------
     M. Graml and J. Wilhelm, Optical excitations in nanographenes from the
     Bethe-Salpeter equation and time-dependent density functional theory,
-    2026, Eqs. (26)-(32); definitions after Mewes, Plasser, Krylov and Dreuw,
+    2026, Eqs. (26)-(36); definitions after Mewes, Plasser, Krylov and Dreuw,
     J. Chem. Theory Comput. 14, 710 (2018), Eqs. (15)-(22).
     """
     if isinstance(mf, scf.uhf.UHF):
@@ -131,12 +144,25 @@ def exciton_descriptors(mf, mol, nocc, X, Y):
     xy = np.einsum('nxib,yib->nxy', v, d_ov)             # sum_ib v_ib mu_ib
     r_eh = (xx + yy + xy + xy.transpose(0, 2, 1)) / c_n[:, None, None]
 
-    # COV_eh = sum_x <r_e^x r_h^x> - <r_e^x><r_h^x>
-    cov_eh = np.einsum('nxx->n', r_eh) - np.einsum('nx,nx->n', r_e, r_h)
-    sigma_e = np.sqrt(r_e2.sum(axis=1) - np.einsum('nx,nx->n', r_e, r_e))
-    sigma_h = np.sqrt(r_h2.sum(axis=1) - np.einsum('nx,nx->n', r_h, r_h))
+    # COV_eh^xy = <r_e^x r_h^y> - <r_e^x><r_h^y>; the scalar COV_eh is its trace
+    cov_mat = r_eh - np.einsum('nx,ny->nxy', r_e, r_h)
+    cov_eh = np.einsum('nxx->n', cov_mat)
+    # per component: sigma^x = sqrt(<x^2> - <x>^2), d_eh^x = |<x_h> - <x_e>|
+    sigma_e_dir = np.sqrt(r_e2 - r_e**2)
+    sigma_h_dir = np.sqrt(r_h2 - r_h**2)
+    d_eh_dir = np.abs(r_h - r_e)
+    cov_diag = np.einsum('nxx->nx', cov_mat)
+    d_exc_dir = np.sqrt(d_eh_dir**2 + sigma_e_dir**2 + sigma_h_dir**2 - 2.0 * cov_diag)
+    # totals: sigma^2 = sum_x (sigma^x)^2, d_eh^2 = sum_x (d_eh^x)^2, likewise d_exc
+    sigma_e = np.sqrt(np.einsum('nx,nx->n', sigma_e_dir, sigma_e_dir))
+    sigma_h = np.sqrt(np.einsum('nx,nx->n', sigma_h_dir, sigma_h_dir))
     d_eh = np.linalg.norm(r_h - r_e, axis=1)
-    d_exc = np.sqrt(d_eh**2 + sigma_e**2 + sigma_h**2 - 2.0 * cov_eh)
+    d_exc = np.sqrt(np.einsum('nx,nx->n', d_exc_dir, d_exc_dir))
     return {'c_n': c_n, 'r_e': r_e, 'r_h': r_h, 'd_eh': d_eh, 'sigma_e': sigma_e,
             'sigma_h': sigma_h, 'cov_eh': cov_eh, 'R_eh': cov_eh / (sigma_e * sigma_h),
-            'd_exc': d_exc}
+            'd_exc': d_exc,
+            'd_eh_dir': d_eh_dir, 'sigma_e_dir': sigma_e_dir,
+            'sigma_h_dir': sigma_h_dir, 'd_exc_dir': d_exc_dir,
+            'R_eh_dir': cov_diag / (sigma_e_dir * sigma_h_dir),
+            'cov_eh_mat': cov_mat,
+            'R_eh_mat': cov_mat / np.einsum('nx,ny->nxy', sigma_e_dir, sigma_h_dir)}
