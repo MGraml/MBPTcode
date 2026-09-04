@@ -251,7 +251,8 @@ def _psi_and_matrix(kind, tau, omega, i, x):
 
 
 def minimax_transform_weights(kind, tau, omega, e_min, e_max,
-                              regularization=None, nodes_factor=200):
+                              regularization=None, nodes_factor=200,
+                              warn=True):
     """One transform matrix by GreenX's per-point regularized least squares.
 
     Returns (W, max_fit_error). W already carries the cos/sin factor absorbed,
@@ -261,6 +262,18 @@ def minimax_transform_weights(kind, tau, omega, e_min, e_max,
     regularization=None picks 0 below _REGULARIZATION_ABOVE points and
     _DEFAULT_REGULARIZATION at or above it -- see the module docstring for the
     conditioning measurement that sets that threshold.
+
+    warn: flag a short fit as a RuntimeWarning. The residual is a signal about
+    the GRID only when both axes come from ONE energy range, which is how
+    `TimeFrequencyGrid.minimax` builds them -- there it discriminates a grid too
+    dense for a narrow range from one too sparse for a wide one, and the hint
+    below points the right way. The self-energy transforms pass warn=False
+    because their axes are DECOUPLED by construction: tau carries the
+    self-energy's range, omega the polarizability's, and the fit range is a
+    third. A short residual there says the ranges differ, which is the method,
+    not a grid to fix -- and the range is set by core states and high-lying
+    virtuals, so it does not bound the frontier energies anyone reads. The
+    number is returned either way.
     """
     # Each OUTPUT point is fitted independently, and the design matrix has one
     # column per INPUT point -- so the conditioning is governed by n_in alone
@@ -281,10 +294,19 @@ def minimax_transform_weights(kind, tau, omega, e_min, e_max,
     for i in range(n_out):
         psi, A = _psi_and_matrix(kind, tau, omega, i, x)
         U, S, Vt = np.linalg.svd(A, full_matrices=False)
-        W[i] = Vt.T @ ((S / (regularization**2 + S**2)) * (U.T @ psi))
+        # S/(reg^2 + S^2) is 0/0 at an exactly singular value when reg is 0,
+        # which is its default below _REGULARIZATION_ABOVE points. That NaNs
+        # the weights and the residual, and a NaN residual passes the threshold
+        # test below silently -- the diagnostic disables itself exactly where
+        # the fit is most degenerate. Drop the null space instead, as the
+        # pseudo-inverse does; every non-zero value is untouched.
+        filt = np.zeros_like(S)
+        nz = S > 0.0
+        filt[nz] = S[nz] / (regularization**2 + S[nz]**2)
+        W[i] = Vt.T @ (filt * (U.T @ psi))
         max_error = max(max_error, float(np.abs(A @ W[i] - psi).max()))
 
-    if max_error > _FIT_ERROR_WARN:
+    if warn and not max_error <= _FIT_ERROR_WARN:   # NaN must not pass
         floor = minimax_convergence_floor(n)
         hint = ''
         if floor is not None:

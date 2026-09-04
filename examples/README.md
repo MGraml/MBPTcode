@@ -12,8 +12,15 @@ All use H2O/cc-pVDZ unless noted, so the numbers are directly comparable.
 | `07_several_states.py` | several ionization states with pole strengths |
 | `08_en_adc3_screened_singles.py` | EN-ADC(3) singles shift, bare vs RPA-screened (BSE-kernel channel split) |
 | `09_isdf_gw_space_time.py` | cubic-scaling GW: an ISDF SCF, then the space-time self-energy on its factors |
+| `10_gw_routes.py` | the four routes to one G0W0 energy: Casida (full ERIs / DF), imaginary frequency, space-time |
 
 ## Choosing a route
+
+**Quasiparticle energies** → `calc_qp_energy(mf, state='homo')`: the Casida
+route with density fitting, `polarizability='RPA'`, i.e. plain G0W0. `mode=`
+swaps in the low-scaling routes (`'imagfrequency'`, `'space-time'`), both of
+which require `df=True`; `df=False` gives the 4-center Casida reference. See
+`10_gw_routes.py`.
 
 **Closed shell** → `ADCSolverRestricted` (spin-free). Add `B_aa=` for DF once the
 dense ERI stops fitting. **Open shell** → `ADCSolver` (spin-orbital).
@@ -38,6 +45,7 @@ only valid for the bare amplitude.
 03  IP = 11.875 eV   Z = 0.929   (EN, spin-adapted)
 06  IP =  8.965 eV   Z = 0.953   (UHF / spin-orbital)
 09  E(ISDF-SCF) = -76.02774739 Ha   G0W0 HOMO = -12.155 eV   (space-time)
+10  G0W0 HOMO = -12.159 eV on all three DF routes, -12.158 eV on space-time
 ```
 
 ## Large systems

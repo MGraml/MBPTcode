@@ -54,7 +54,7 @@ from src.SingleReference.GW.imaginary_time import (self_energy_matrix_imaginary_
                                                    screened_interaction_tau_blocked,
                                                    minimax_points_for_gw,
                                                    DEFAULT_TAU_TARGET)
-from src.SingleReference.GW.qp_solve import (static_exchange_matrix,
+from src.SingleReference.GW.qp_solve import (static_exchange_diagonal,
                                              solve_qp_from_imaginary_axis,
                                              imaginary_axis_sample_points)
 from src.SingleReference.LinearResponse.space_time import chi0_imaginary_frequency
@@ -66,7 +66,8 @@ DEFAULT_COUNTS = {'A1': 8, 'A2': 5, 'A3': 3, 'B1': 1}
 
 
 def separable_factors(mf, mol, auxbasis=None, radii=None, counts=None,
-                      block_memory_gb=4.0, pair_tol=DEFAULT_PAIR_TOL):
+                      block_memory_gb=4.0, pair_tol=DEFAULT_PAIR_TOL,
+                      n_start=1):
     """(X_mo, D, X_ao, coords) of the Duchemin-Blase separable RI, Z = D D^T.
 
     X_ao is the collocation the fit actually produces; X_mo = X_ao C is the
@@ -77,8 +78,11 @@ def separable_factors(mf, mol, auxbasis=None, radii=None, counts=None,
     not depend on the orientation of the molecule.
 
     radii:           per-element shell radii; optimized per element if omitted.
-    block_memory_gb: caps the working set of the fit's blocked loops. Changes
-                     peak allocation only, not the answer or the speed.
+    block_memory_gb: caps the working set of the fit's blocked loops. It does
+                     not change the answer, but it IS a speed knob as well as a
+                     memory one -- one `aux_e2` call per block, each rebuilding
+                     a shell-pair list over nbas x auxnbas. See `build_D_F`,
+                     which carries the measurement; size it from the node.
     """
     auxbasis = auxbasis or (str(mol.basis) + '-ri')
     auxmol = pyscf_df.addons.make_auxmol(mol, auxbasis=auxbasis)
@@ -92,7 +96,8 @@ def separable_factors(mf, mol, auxbasis=None, radii=None, counts=None,
                 radii[el], origins[el] = pub[el]
             else:
                 radii[el] = optimize_atomic_radii(el, mol.basis, auxbasis,
-                                                  counts=counts)[0]
+                                                  counts=counts,
+                                                  n_start=n_start)[0]
                 origins[el] = False
     else:
         origins = {el: False for el in radii}
@@ -172,7 +177,7 @@ def _sigma_mo_diagonal(X_mo, D, W_omega, mf, eps, nocc, tau_points, freq_points,
 
 
 def _finish_qp(sigma, eps, nocc, p_state, mu, pade_freq, mf, mol,
-               solver_mode, dm_correction, greedy, timings):
+               solver_mode, dm_correction, greedy, timings, sigma_x='mf'):
     """Sigma_c on the imaginary axis -> quasiparticle energy, one per state."""
     states = np.atleast_1d(p_state)
     scalar = np.ndim(p_state) == 0
@@ -181,14 +186,15 @@ def _finish_qp(sigma, eps, nocc, p_state, mu, pade_freq, mf, mol,
     _t = _time.time()
     # One exchange build for the whole window: <Sigma_x - v_xc> carries no state
     # index until it is indexed.
-    xc_diag = np.diag(static_exchange_matrix(mf, mol,
-                                             dm_correction=dm_correction))
+    xc_diag = static_exchange_diagonal(mf, mol, states,
+                                       dm_correction=dm_correction,
+                                       exchange=sigma_x)
     out = []
     for i, p in enumerate(states):
         z_fit, _ = imaginary_axis_sample_points(pade_freq, nocc, p, mu)
         # Occupied states sit on the negative branch, where Sigma(-i w) = conj.
         s_p = np.conj(sig[i]) if p < nocc else sig[i]
-        out.append(solve_qp_from_imaginary_axis(eps, int(p), xc_diag[int(p)],
+        out.append(solve_qp_from_imaginary_axis(eps, int(p), xc_diag[i],
                                                 z_fit, s_p, greedy=greedy,
                                                 solver_mode=solver_mode))
     if timings is not None:
@@ -204,7 +210,7 @@ def solve_qp_energy_space_time(mf, mol, nocc, p_state,
                                timings=None, distribute=False, comm=None,
                                freq_block=None, scratch_dir=None,
                                tau_target=DEFAULT_TAU_TARGET, extras=None,
-                               screen_r_cut=None):
+                               screen_r_cut=None, sigma_x='mf'):
     """GW@RPA quasiparticle energy by the space-time route; restricted, DF only.
 
     Same quantity as `calc_qp_energy(selfenergy='GW', polarizability='RPA')`.
@@ -222,6 +228,11 @@ def solve_qp_energy_space_time(mf, mol, nocc, p_state,
     distribute:  split the tau sums over MPI ranks and all-reduce; exact, no
                  halo. The Dyson inversion stays replicated.
     extras:      dict; receives W(omega=0) for a BSE on the same factors.
+    sigma_x:     which K builds the static exchange, see
+                 `static_exchange_diagonal`. 'mf' on an ISDF mean field puts
+                 the grid's K error into every QP energy at first order;
+                 'df-direct' removes it with one streamed three-index pass and
+                 no stored tensor, 'exact' with a full direct K.
     """
     eps = get_orbital_energies(mf, representation='spatial')
     occ, virt = get_occ_virt_indices(eps, nocc)
@@ -278,7 +289,7 @@ def solve_qp_energy_space_time(mf, mol, nocc, p_state,
                            freq_points, pade_freq, p_state, want_static, extras,
                            ntau, nranks, freq_block, scratch_dir, solver_mode,
                            dm_correction, greedy, timings, X_ao, coords,
-                           screen_r_cut)
+                           screen_r_cut, sigma_x)
 
     _t = _time.time()
     chi0 = chi0_imaginary_frequency(X_mo, D, eps, nocc, grid, mu=mu,
@@ -316,13 +327,13 @@ def solve_qp_energy_space_time(mf, mol, nocc, p_state,
         timings['t_sigma'] = _time.time() - _t
 
     return _finish_qp(sigma, eps, nocc, p_state, mu, pade_freq, mf, mol,
-                      solver_mode, dm_correction, greedy, timings)
+                      solver_mode, dm_correction, greedy, timings, sigma_x)
 
 
 def _qp_blocked(X_mo, D, mf, mol, eps, nocc, mu, grid, tau_points, freq_points,
                 pade_freq, p_state, want_static, extras, ntau, nranks,
                 freq_block, scratch_dir, solver_mode, dm_correction, greedy,
-                timings, X_ao, coords, screen_r_cut):
+                timings, X_ao, coords, screen_r_cut, sigma_x='mf'):
     """Low-memory branch: chi0 is never formed.
 
     Frequencies are built, inverted and folded into Wt(i.tau) a block at a time,
@@ -339,7 +350,10 @@ def _qp_blocked(X_mo, D, mf, mol, eps, nocc, mu, grid, tau_points, freq_points,
     # omega = 0 into the fit refits every other coefficient.
     static_idx = None
     fit_freqs = freq_points[:-1] if want_static else freq_points
-    Ctw, _ = minimax_transform_weights(COSINE_WT, tau_points, fit_freqs, *rW)
+    Ctw, w_fit_err = minimax_transform_weights(COSINE_WT, tau_points,
+                                               fit_freqs, *rW, warn=False)
+    if timings is not None:
+        timings['w_fit_error'] = w_fit_err
     if want_static:
         static_idx = len(freq_points) - 1
         Ctw = np.hstack([Ctw, np.zeros((Ctw.shape[0], 1))])
@@ -366,7 +380,7 @@ def _qp_blocked(X_mo, D, mf, mol, eps, nocc, mu, grid, tau_points, freq_points,
         timings['t_sigma'] = _time.time() - _t
 
     out = _finish_qp(sigma, eps, nocc, p_state, mu, pade_freq, mf, mol,
-                     solver_mode, dm_correction, greedy, timings)
+                     solver_mode, dm_correction, greedy, timings, sigma_x)
     del Wt_tau, sigma
     if wt_path and os.path.exists(wt_path):
         os.remove(wt_path)

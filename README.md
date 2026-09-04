@@ -105,11 +105,16 @@ references, several ionization states, and screened singles.
 
 ## Tests
 
-The tests are standalone scripts that print their own verdicts:
+The tests are standalone scripts that print their own verdicts and exit
+non-zero on failure:
 
 ```bash
 python tests/test_adc3.py
 ```
+
+`pytest` collects almost nothing here — the checks live under
+`if __name__ == '__main__'` — so run them as scripts and read the exit code.
+`tests/README.md` maps which tests cover what.
 
 ## Layout
 

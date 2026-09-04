@@ -283,7 +283,7 @@ def oscillator_strengths(mf, mol, nocc, omega, X, Y):
 def solve_bse_isdf(mf, mol, nocc, nroots=5, qp='G0W0', factors=None,
                    auxbasis=None, radii=None, counts=None, probe=True,
                    conv_tol=1e-5, max_cycle=100, guess_factor=GUESS_FACTOR,
-                   gw_kwargs=None, progress=None):
+                   gw_kwargs=None, progress=None, n_start=1):
     """BSE by the ISDF matrix-free Davidson: mean field in, excitations out.
 
     The production calling sequence is three lines --
@@ -349,7 +349,7 @@ def solve_bse_isdf(mf, mol, nocc, nroots=5, qp='G0W0', factors=None,
     if factors is None:
         t0 = _begin('factors')
         factors = separable_factors(mf, mol, auxbasis=auxbasis, radii=radii,
-                                    counts=counts)
+                                    counts=counts, n_start=n_start)
         _end('factors', t0)
         if progress:
             print(f'[bse {time.strftime("%H:%M:%S")}] ISDF M={factors[1].shape[0]} '
@@ -450,7 +450,7 @@ def minimax_points_for_bse(eps, nocc, tau_target=DEFAULT_TAU_TARGET):
 def isdf_bse_factors(mf, mol, nocc, eps=None,
                      auxbasis=None, radii=None, counts=None, factors=None,
                      screening='imaginary-time', ntau=DEFAULT_NTAU,
-                     tau_target=DEFAULT_TAU_TARGET):
+                     tau_target=DEFAULT_TAU_TARGET, n_start=1):
     """(X_mo, D, W_aux) for the ISDF Davidson BSE, all from ONE auxiliary fit.
 
     The point is the gauge. `LinearResponseSolver.static_screening_aux` returns
@@ -495,7 +495,7 @@ def isdf_bse_factors(mf, mol, nocc, eps=None,
     X_mo, D = _unpack_factors(
         factors if factors is not None
         else separable_factors(mf, mol, auxbasis=auxbasis, radii=radii,
-                               counts=counts))[:2]
+                               counts=counts, n_start=n_start))[:2]
     if eps is None:
         eps = get_orbital_energies(mf, representation='spatial')
 

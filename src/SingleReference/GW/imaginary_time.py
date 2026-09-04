@@ -318,7 +318,8 @@ def self_energy_matrix_imaginary_time(X_ao, D, W_omega, mo_coeff, eps, nocc,
     rW, rS = ranges or self_energy_fit_ranges(eps, nocc, mu=mu)
 
     if Wt_tau is None:
-        Ctw, _ = minimax_transform_weights(COSINE_WT, tau_points, omega_in, *rW)
+        Ctw, _ = minimax_transform_weights(COSINE_WT, tau_points, omega_in,
+                                           *rW, warn=False)
         Wt_tau = _transform_screened(Ctw, W_omega)
     # else the caller built it blockwise and W_omega was never formed at all
 
@@ -327,8 +328,10 @@ def self_energy_matrix_imaginary_time(X_ao, D, W_omega, mo_coeff, eps, nocc,
     e_o, e_v = eps[occ] - mu, eps[virt] - mu
 
     ntau, nao = len(tau_points), X_ao.shape[1]
-    C, _ = minimax_transform_weights(COSINE_TW, tau_points, omega_out, *rS)
-    S, _ = minimax_transform_weights(SINE_TW, tau_points, omega_out, *rS)
+    C, _ = minimax_transform_weights(COSINE_TW, tau_points, omega_out, *rS,
+                                     warn=False)
+    S, _ = minimax_transform_weights(SINE_TW, tau_points, omega_out, *rS,
+                                     warn=False)
 
     # STREAMED OVER TAU, not staged. The tau -> omega transform is a sum over
     # tau, so each time point can be folded into the output as soon as it is

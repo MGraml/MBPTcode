@@ -139,13 +139,17 @@ def range_coulomb(mol, auxmol, omega):
             auxmol.omega = saved[1]
 
 
-def isdf_grid(mol, counts=None, radii=None, auxbasis=None):
+def isdf_grid(mol, counts=None, radii=None, auxbasis=None, n_start=1):
     """Interpolation points for `mol`, the same way `space_time` picks them.
 
     Published Duchemin-Blase tables where they apply (H/C/N/O at cc-pVTZ),
     `optimize_atomic_radii` otherwise -- which is cached on disk per
-    (element, basis, auxbasis, counts). Shells are rotated into covariant
-    atomic frames so the grid rotates with the molecule.
+    (element, basis, auxbasis, counts, n_start). Shells are rotated into
+    covariant atomic frames so the grid rotates with the molecule.
+
+    n_start: descents per element in `optimize_atomic_radii`. The single
+        default descent is the worst of the starting shapes on carbon; six cut
+        benzene's exchange-energy error 23x at the same point count.
     """
     counts = counts or DEFAULT_COUNTS
     auxbasis = auxbasis or (str(mol.basis) + '-ri')
@@ -157,7 +161,8 @@ def isdf_grid(mol, counts=None, radii=None, auxbasis=None):
                 radii[el], origins[el] = pub[el]
             else:
                 radii[el] = optimize_atomic_radii(el, mol.basis, auxbasis,
-                                                  counts=counts)[0]
+                                                  counts=counts,
+                                                  n_start=n_start)[0]
                 origins[el] = False
     else:
         origins = {el: False for el in radii}
@@ -351,13 +356,14 @@ class ISDFJK(df.df.DF):
                  z_mode='auto', block=None, refit_omega=False,
                  use_symmetry=True, j_route='df-direct', check_tol=1e-3,
                  l_max_second=2, regularization=DEFAULT_REGULARIZATION,
-                 block_memory_gb=4.0, progress=None):
+                 block_memory_gb=4.0, progress=None, n_start=1):
         super().__init__(mol, auxbasis=auxbasis or (str(mol.basis) + '-ri'))
         # Caps the working set of the fit's blocked loops. It reaches here
         # because the fit is where the peak is: the Gram matrix is n_k^2, 14.9
         # GB at the dimer/cc-pVTZ, and everything else in the build is small
-        # beside it. Lower it when the node is tight; it does not change the
-        # answer and does not buy speed.
+        # beside it. It does not change the answer, but it IS a speed knob:
+        # one aux_e2 call per block, each rebuilding a shell-pair list over
+        # nbas x auxnbas -- see `separable_ri.build_D_F` for the measurement.
         self.block_memory_gb = block_memory_gb
         # None follows mol.verbose, so the knob that turns on the mean field's
         # output turns on the factorization's too. It is minutes to hours here
@@ -365,6 +371,7 @@ class ISDFJK(df.df.DF):
         self.progress = (mol.verbose > 0) if progress is None else progress
         self.counts = counts or DEFAULT_COUNTS
         self.radii = radii
+        self.n_start = n_start
         self.z_mode = z_mode
         self.block = block
         self.refit_omega = refit_omega
@@ -422,7 +429,7 @@ class ISDFJK(df.df.DF):
             self.auxmol = df.addons.make_auxmol(mol, auxbasis=self.auxbasis)
         if self.coords is None:
             self.coords = isdf_grid(mol, counts=self.counts, radii=self.radii,
-                                    auxbasis=self.auxbasis)
+                                    auxbasis=self.auxbasis, n_start=self.n_start)
         self.X = mol.eval_gto('GTOval_sph', self.coords)
         self.M = fit_M_streaming(mol, self.auxmol, self.coords,
                                  l_max_second=self.l_max_second,
@@ -554,6 +561,42 @@ class ISDFJK(df.df.DF):
                         / max(abs(e_ref), 1e-12))
         return float(worst)
 
+    def check_k(self, dms=None, omega=None):
+        """Exchange-energy error of ISDF-K against stored-cderi DF-K, in Hartree.
+
+        `check` probes J because a broken grid shows there first -- but J is
+        protected by `j_route='df-direct'`, so on the production route the ONLY
+        term the grid touches is K, and a K error too small to trip the J probe
+        is not small in absolute terms: 1e-3 relative on a 178-atom molecule is
+        0.12 Ha in the SCF energy, i.e. 30 meV on every BSE root. This is the
+        instrument for that. It returns (max |dE_x| in Ha, max relative), with
+        E_x = -1/4 tr(D K) for a closed-shell D.
+
+        The reference builds a three-index tensor, naux x nao^2 / 2, so this is a
+        SMALL-MOLECULE calibration tool for choosing grids, not a check to run
+        inside a production SCF. `omega` probes the attenuated K a range-
+        separated functional also builds.
+        """
+        if not self._built:
+            self.build()
+        if dms is None:
+            dms = self.probe_densities()
+        if not isinstance(dms, dict):
+            dms = {'dm': dms}
+        ref = df.DF(self.mol, auxbasis=self.auxmol.basis)
+        ref.build()
+        nao = self.mol.nao_nr()
+        worst_abs, worst_rel = 0.0, 0.0
+        for dm in dms.values():
+            dm = np.asarray(dm).reshape(-1, nao, nao)[0]
+            vk_ref = ref.get_jk(dm, hermi=1, with_j=False, omega=omega)[1]
+            vk = self.get_jk(dm, hermi=1, with_j=False, omega=omega)[1]
+            ex_ref = -0.25 * np.einsum('ij,ji->', vk_ref, dm)
+            d = abs(-0.25 * np.einsum('ij,ji->', vk, dm) - ex_ref)
+            worst_abs = max(worst_abs, d)
+            worst_rel = max(worst_rel, d / max(abs(ex_ref), 1e-12))
+        return float(worst_abs), float(worst_rel)
+
     # -- the interface _DFHF calls ------------------------------------------
 
     def get_jk(self, dm, hermi=1, with_j=True, with_k=True,
@@ -582,11 +625,17 @@ class ISDFJK(df.df.DF):
                 logger.warn(self, 'ISDF interpolation grid is weak: the Coulomb '
                             'energy of a probe density is %.2e off integral-'
                             'direct DF-J (tolerance %.1e), on M = %d points '
-                            'over %d atoms. Grids for elements or bases outside '
-                            'published_grids() come from optimize_atomic_radii, '
-                            'whose default local descent is known to land in bad '
-                            'minima -- rerun it with basin_hopping > 0. %s',
-                            rel, self.check_tol, self.nk, self.mol.natm, remedy)
+                            'over %d atoms (%d per atom). Grids for elements or '
+                            'bases outside published_grids() come from '
+                            'optimize_atomic_radii: raise the point COUNT '
+                            '(counts=) or the number of starts (n_start=), NOT '
+                            'basin_hopping, which re-optimizes radii at fixed '
+                            'count and was measured at 11x the optimizer time '
+                            'for ~6%% (C/cc-pVTZ 0.2326 -> 0.2191) against a '
+                            '~10x gap to the published tables at matched '
+                            'count. %s',
+                            rel, self.check_tol, self.nk, self.mol.natm,
+                            self.nk // max(self.mol.natm, 1), remedy)
                 self.grid_warning = rel
         if not (with_j or with_k):
             return vj, vk
@@ -685,7 +734,7 @@ def separable_factors_from_jk(mf):
 def isdf_jk(mf, auxbasis=None, counts=None, radii=None, z_mode='auto',
             block=None, refit_omega=False, use_symmetry=True,
             j_route='df-direct', check_tol=1e-3, l_max_second=2,
-            block_memory_gb=4.0, progress=None):
+            block_memory_gb=4.0, progress=None, n_start=1):
     """Give `mf` an ISDF `with_df`. Returns the modified SCF object.
 
     Routes through pyscf's own `density_fit` so the `_DFHF` mixin (which is
@@ -697,6 +746,7 @@ def isdf_jk(mf, auxbasis=None, counts=None, radii=None, z_mode='auto',
                          z_mode=z_mode, block=block, refit_omega=refit_omega,
                          use_symmetry=use_symmetry, j_route=j_route,
                          check_tol=check_tol, l_max_second=l_max_second,
-                         block_memory_gb=block_memory_gb, progress=progress)
+                         block_memory_gb=block_memory_gb, progress=progress,
+                         n_start=n_start)
     out.with_df.max_memory = mf.max_memory
     return out

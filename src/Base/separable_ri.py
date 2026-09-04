@@ -587,6 +587,71 @@ def _flat_from_radii(radii):
                            if n in radii and len(np.atleast_1d(radii[n]))])
 
 
+#: Radial shapes for the multi-start search, as (lo, hi, curvature) triples.
+#: The objective is multi-modal and start diversity is the only lever measured
+#: to help. One descent per shape, carbon/cc-pVDZ at 148 counts, everything
+#: else at production settings:
+#:
+#:     7.59e-02   4.50e-04   3.03e-03   1.03e-01   1.47e-02   2.61e-02
+#:
+#: Shape 0 is the plain geometric ladder, so n_start=1 is the old single
+#: descent -- and it is the worst of the six. Two variations that look like
+#: fixes are not: a monotone reparametrization making coincident radii
+#: unreachable was no better, and widening r_max acts only by moving where the
+#: starts land, since nothing sits on the bound and the result is not monotone
+#: in it.
+_START_SHAPES = ((2.0, 0.80, 1.00), (1.0, 0.80, 1.00), (4.0, 0.80, 1.00),
+                 (0.5, 0.80, 1.00), (2.0, 0.50, 1.00), (2.0, 1.00, 1.00),
+                 (2.0, 0.80, 1.60), (2.0, 0.80, 0.62), (1.0, 0.50, 1.60),
+                 (4.0, 1.00, 0.62), (0.5, 0.50, 1.30), (8.0, 0.80, 0.80),
+                 (1.5, 0.65, 1.90), (3.0, 0.90, 0.45), (0.8, 0.75, 1.15),
+                 (6.0, 0.60, 1.45))
+
+
+def _start_radii(counts, r_min, r_max, k):
+    """Starting radii for descent `k`: a geometric ladder, warped.
+
+    r_i = lo (hi/lo)^((i/(n-1))^p), so p > 1 crowds the samples inwards where
+    the co-density is largest and p < 1 pushes them out. Cycles the table if
+    more starts are asked for than it holds.
+    """
+    lo_f, hi_f, p = _START_SHAPES[k % len(_START_SHAPES)]
+    lo, hi = r_min * lo_f, r_max * hi_f
+    out = {}
+    for name, n in counts.items():
+        if not n:
+            continue
+        t = np.zeros(1) if n == 1 else np.linspace(0.0, 1.0, n)
+        out[name] = lo * (hi / lo) ** (t ** p)
+    return out
+
+
+#: Radial search box per element, Bohr, for a MULTI-START search. The single
+#: geometric descent keeps `LEGACY_R_MAX` so every cached and shipped grid keeps
+#: its key. Second-row values are the measured ones: benzene's 23x exchange
+#: gain was found at 5.0, and widening to 16 made it worse. Magnesium's density
+#: reaches ~14 Bohr -- its fit error is flat in point count and 8x better at 16
+#: (radii out to 13.7; Mg(OH)2 exchange error 0.72 -> 0.19 mHa/atom) -- and the
+#: other diffuse-valence elements (groups 1-2, period 3) are given the same
+#: prior, to be checked against exchange errors on probes containing them.
+#: Published carbon's largest A1 radius, 5.295, already lies outside the legacy
+#: box.
+LEGACY_R_MAX = 5.0
+ELEMENT_R_MAX = {'H': 5.0, 'He': 5.0,
+                 'B': 5.0, 'C': 5.0, 'N': 5.0, 'O': 5.0, 'F': 5.0, 'Ne': 5.0,
+                 'Li': 16.0, 'Be': 16.0, 'Na': 16.0, 'Mg': 16.0,
+                 'K': 20.0, 'Ca': 20.0,
+                 'Al': 12.0, 'Si': 12.0, 'P': 12.0, 'S': 12.0, 'Cl': 12.0,
+                 'Ar': 12.0}
+
+
+def search_r_max(element, n_start=1, r_max=None):
+    """The box a radii search runs in: explicit, legacy for one descent, else per element."""
+    if r_max is not None:
+        return float(r_max)
+    return LEGACY_R_MAX if n_start == 1 else ELEMENT_R_MAX.get(element, 12.0)
+
+
 def shipped_radii():
     """Optimized atomic radii that travel WITH the source, not in a scratch cache.
 
@@ -612,9 +677,15 @@ def shipped_radii():
         return json.load(fh)
 
 
-def _shipped_key(element, basis, auxbasis, counts):
+def _shipped_key(element, basis, auxbasis, counts, n_start=1,
+                 r_max=LEGACY_R_MAX):
+    """Table key. The recipe (n_start, r_max) is appended only when it is not
+    the legacy single descent in the legacy box, so every existing key stands
+    and rows for different recipes coexist instead of overwriting each other."""
+    recipe = ([] if n_start == 1 else [['n_start', int(n_start)]]) + \
+             ([] if float(r_max) == LEGACY_R_MAX else [['r_max', float(r_max)]])
     return json.dumps([element, str(basis), str(auxbasis),
-                       sorted((counts or {}).items())])
+                       sorted((counts or {}).items())] + recipe)
 
 
 def shipped_radii_lookup(element, basis, auxbasis, settings):
@@ -627,7 +698,8 @@ def shipped_radii_lookup(element, basis, auxbasis, settings):
     shipped table open.
     """
     entry = shipped_radii().get(
-        _shipped_key(element, basis, auxbasis, dict(settings['counts'])))
+        _shipped_key(element, basis, auxbasis, dict(settings['counts']),
+                     settings.get('n_start', 1), settings['r_max']))
     if entry is None:
         return None
     # Compare CANONICAL JSON, not the objects: a round trip through the file
@@ -640,7 +712,8 @@ def shipped_radii_lookup(element, basis, auxbasis, settings):
 
 
 def _radii_settings(counts, r_min, r_max, l_max_second, regularization,
-                    maxiter, seed, basin_hopping, temperature, step):
+                    maxiter, seed, basin_hopping, temperature, step,
+                    n_start=1, origin=False):
     """Every argument that changes the radii this optimizer returns.
 
     ALL of them belong in the cache key. Leaving one out does not cause a miss,
@@ -650,7 +723,10 @@ def _radii_settings(counts, r_min, r_max, l_max_second, regularization,
     the key and an experiment that varied it returned four identical numbers in
     zero seconds, which is the only reason it was noticed.
     """
-    return {'counts': sorted((counts or {}).items()), 'r_min': r_min,
+    out = ({'n_start': int(n_start), 'origin': bool(origin)}
+           if (n_start != 1 or origin) else {})
+    return {**out,
+            'counts': sorted((counts or {}).items()), 'r_min': r_min,
             'r_max': r_max, 'l_max_second': l_max_second,
             'regularization': regularization, 'maxiter': maxiter, 'seed': seed,
             'basin_hopping': basin_hopping, 'temperature': temperature,
@@ -666,10 +742,11 @@ def _radii_cache_path(element, basis, auxbasis, settings):
 
 
 def optimize_atomic_radii(element, basis, auxbasis, counts=None,
-                          r_min=0.05, r_max=5.0, l_max_second=2,
+                          r_min=0.05, r_max=None, l_max_second=2,
                           regularization=DEFAULT_REGULARIZATION,
                           maxiter=200, seed=0, verbose=False,
-                          basin_hopping=0, temperature=0.5, step=0.35):
+                          basin_hopping=0, temperature=0.5, step=0.35,
+                          n_start=1, origin=False, return_candidates=False):
     """Minimize their eq 10 over the radii of one isolated atom.
 
     Returns (radii dict, final Coulomb-metric fit error). Run once per
@@ -683,6 +760,28 @@ def optimize_atomic_radii(element, basis, auxbasis, counts=None,
     memory Broyden-Fletcher-Goldfarb-Shanno algorithm"). The objective is
     multi-modal in the radii, so the plain local descent lands well above the
     published grids' accuracy.
+
+    n_start:  local descents from different radial SHAPES, best kept. This is
+        the knob that matters: the single geometric descent returns carbon's A3
+        as 0.199, 0.202 -- duplicates wasting 12 of its 36 points, at fit error
+        7.59e-02 -- where four starts reach 4.66e-04, 163x better, for four
+        times an offline cost paid once per (element, basis, counts) and
+        cached. See `_START_SHAPES`.
+    origin:   optimize with the nuclear cusp sampled, as every published table
+        does. Worth 2.2-5.5x on those tables, and ~1.00x if bolted onto radii
+        optimized without it -- a grid with no cusp point already spends a
+        radius near zero doing that job.
+    return_candidates: also return every start's (radii, fit_error). The fit
+        error does not predict the exchange error -- two carbon grids at
+        4.50e-04 differ 2.4x in |dE_x| on benzene -- so a caller with a better
+        criterion (`ISDFJK.check_k` on a probe) can choose among the local
+        minima itself. The cache still holds the best BY FIT ERROR.
+
+    r_max:    None selects the box by `search_r_max`: the legacy 5.0 for a
+        single descent, `ELEMENT_R_MAX[element]` for a multi-start search. The
+        legacy box excludes published carbon's largest A1 radius (5.295) and
+        magnesium's density altogether; it is kept for n_start=1 only so that
+        every existing cached and shipped grid keeps its key.
     """
     from scipy.optimize import minimize, basinhopping
 
@@ -704,14 +803,19 @@ def optimize_atomic_radii(element, basis, auxbasis, counts=None,
     # It is consulted BEFORE the cache: the cache is per-machine scratch and the
     # table is the version-controlled answer, so where they differ the tracked
     # one has to win or the repository does not describe its own results.
+    r_max = search_r_max(element, n_start, r_max)
     settings = _radii_settings(counts, r_min, r_max, l_max_second, regularization,
-                               maxiter, seed, basin_hopping, temperature, step)
+                               maxiter, seed, basin_hopping, temperature, step,
+                               n_start, origin)
+    # Neither the table nor the cache holds the runners-up, so a caller that
+    # wants every candidate has to run the search; the table and cache still
+    # receive its best-by-fit result on the way out.
     shipped = shipped_radii_lookup(element, basis, auxbasis, settings)
-    if shipped is not None:
+    if shipped is not None and not return_candidates:
         return shipped
 
     cache = _radii_cache_path(element, basis, auxbasis, settings)
-    if os.path.exists(cache):
+    if os.path.exists(cache) and not return_candidates:
         # Tolerate a damaged cache rather than trusting it. A truncated or
         # half-written file is not hypothetical: a SLURM array starts every task
         # at once and they all optimize the same H and C radii into the same
@@ -728,30 +832,34 @@ def optimize_atomic_radii(element, basis, auxbasis, counts=None,
                  spin=gto.charge(element) % 2)
     auxatom = df.addons.make_auxmol(atom, auxbasis=auxbasis)
 
-    n_tot = sum(counts.values())
-    start = {name: np.geomspace(r_min * 2, r_max * 0.8, n)
-             for name, n in counts.items() if n}
-    x0 = _flat_from_radii(start)
+    decode = lambda x: _radii_from_flat(
+        np.clip(x, np.log(r_min), np.log(r_max)), counts)
+    bounds = [(np.log(r_min), np.log(r_max))] * sum(counts.values())
+    starts = [_flat_from_radii(_start_radii(counts, r_min, r_max, k))
+              for k in range(max(1, n_start))]
 
     def objective(x):
-        radii = _radii_from_flat(np.clip(x, np.log(r_min), np.log(r_max)), counts)
-        coords = atomic_points(radii)
         try:
-            return fit_error_coulomb(atom, auxatom, coords,
+            return fit_error_coulomb(atom, auxatom,
+                                     atomic_points(decode(x), origin=origin),
                                      l_max_second=l_max_second,
                                      regularization=regularization)
         except np.linalg.LinAlgError:
             return 1e6
 
-    bounds = [(np.log(r_min), np.log(r_max))] * len(x0)
     kw = dict(method='L-BFGS-B', bounds=bounds, options={'maxiter': maxiter})
-    if basin_hopping:
-        res = basinhopping(objective, x0, niter=basin_hopping,
-                           T=temperature, stepsize=step,
-                           minimizer_kwargs=kw, seed=seed)
-    else:
-        res = minimize(objective, x0, **kw)
-    radii = _radii_from_flat(res.x, counts)
+    res, candidates = None, []
+    for x0 in starts:
+        if basin_hopping:
+            r = basinhopping(objective, x0, niter=basin_hopping,
+                             T=temperature, stepsize=step,
+                             minimizer_kwargs=kw, seed=seed)
+        else:
+            r = minimize(objective, x0, **kw)
+        candidates.append((decode(r.x), float(r.fun)))
+        if res is None or r.fun < res.fun:
+            res = r
+    radii = decode(res.x)
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         # ATOMIC. `open(cache, 'w')` truncates before it writes, so a concurrent
@@ -770,8 +878,10 @@ def optimize_atomic_radii(element, basis, auxbasis, counts=None,
         pass                    # a read-only checkout must not break the run
     if verbose:
         npts = sum(len(_SHELLS[n]) * len(r) for n, r in radii.items())
-        print(f'  {element}: {npts} points, fit err {objective(x0):.3e} '
-              f'-> {res.fun:.3e}')
+        print(f'  {element}: {npts} points, {len(starts)} start(s), '
+              f'fit err {res.fun:.3e}')
+    if return_candidates:
+        return radii, float(res.fun), candidates
     return radii, float(res.fun)
 
 
