@@ -16,7 +16,7 @@ import os
 import sys
 
 import numpy as np
-from pyscf import df, gto, scf
+from pyscf import df, dft, gto, scf
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -127,11 +127,10 @@ def main():
     d_exc = np.sqrt(d_eh**2 + sig_e**2 + sig_h**2 - 2 * cov)
     ok &= check(abs(d['d_exc'][0] - d_exc) < TOL, 'd_exc from the four pieces')
     # full <r_e^x r_h^y>: electron component on <a|.|a>, <j|.|j>, <a|.|j>; hole
-    # component on <i|.|i>, <b|.|b>, <i|.|b>
+    # component on <i|.|i>, <b|.|b>, <i|.|b>; the cross term counts twice
     r_eh_mat = (x * x * np.outer(mu[:, a, a], mu[:, i, i])
                 + y * y * np.outer(mu[:, j, j], mu[:, b, b])
-                + x * y * (np.outer(mu[:, a, j], mu[:, i, b])
-                           + np.outer(mu[:, i, b], mu[:, a, j]))) / c
+                + 2 * x * y * np.outer(mu[:, a, j], mu[:, i, b])) / c
     cov_mat = r_eh_mat - np.outer(r_e, r_h)
     sig_e_dir = np.sqrt(r_e2 - r_e**2)
     sig_h_dir = np.sqrt(r_h2 - r_h**2)
@@ -198,6 +197,58 @@ def main():
     except NotImplementedError:
         raised = True
     ok &= check(raised, 'UHF mean field raises NotImplementedError')
+
+    print('\n=== 6. grid oracle: every moment from Psi itself, by quadrature ===')
+    # Independent of the module's contractions: Psi(r_e, r_h) is built on the
+    # Becke grid from its definition, with random dense X and Y on an asymmetric
+    # molecule so every index role is distinct, and each moment is a double sum.
+    mol3 = gto.M(atom='O 0 0 0; H 0.2 0.75 -0.5; H -0.1 -0.8 -0.4', basis='6-31g',
+                 verbose=0)
+    mf3 = scf.RHF(mol3).run()
+    nocc3 = mol3.nelectron // 2
+    nvirt3 = mf3.mo_coeff.shape[1] - nocc3
+    rng = np.random.default_rng(7)
+    X3 = rng.standard_normal((nocc3 * nvirt3, 2))
+    Y3 = 0.3 * rng.standard_normal((nocc3 * nvirt3, 2))
+    d = exciton_descriptors(mf3, mol3, nocc3, X3, Y3)
+    grids = dft.gen_grid.Grids(mol3)
+    grids.level = 3
+    grids.build()
+    coords, w = grids.coords, grids.weights
+    phi = dft.numint.eval_ao(mol3, coords) @ mf3.mo_coeff          # (ng, nmo)
+    err_s = np.abs(phi.T @ (w[:, None] * phi) - np.eye(phi.shape[1])).max()
+    phi_o, phi_v = phi[:, :nocc3], phi[:, nocc3:]
+    # per point: 1, x, y, z, x^2, y^2, z^2, weighted
+    wm = w[:, None] * np.hstack([np.ones((len(w), 1)), coords, coords**2])
+    tol = max(1e-6, 100 * err_s)
+    worst = 0.0
+    for n in range(2):
+        T = X3[:, n].reshape(nocc3, nvirt3)
+        U = Y3[:, n].reshape(nocc3, nvirt3)
+        acc = np.zeros((7, 7))                                    # [O_e, O_h]
+        for s in range(0, len(w), 512):
+            ge = slice(s, s + 512)
+            # Psi[ge, gh] = sum_ia X_ia psi_a(ge) psi_i(gh) + Y_ia psi_i(ge) psi_a(gh)
+            psi = (phi_v[ge] @ T.T) @ phi_o.T + (phi_o[ge] @ U) @ phi_v.T
+            acc += wm[ge].T @ (psi**2) @ wm
+        c = acc[0, 0]
+        r_e, r_h = acc[1:4, 0] / c, acc[0, 1:4] / c
+        r_eh = acc[1:4, 1:4] / c                                   # [x_e, y_h]
+        sig_e = np.sqrt(acc[4:7, 0].sum() / c - r_e @ r_e)
+        sig_h = np.sqrt(acc[0, 4:7].sum() / c - r_h @ r_h)
+        cov = r_eh - np.outer(r_e, r_h)
+        d_exc2 = (acc[4:7, 0] + acc[0, 4:7] - 2 * np.diag(acc[1:4, 1:4])).sum() / c
+        got = {'c_n': d['c_n'][n], 'r_e': d['r_e'][n], 'r_h': d['r_h'][n],
+               'sigma_e': d['sigma_e'][n], 'sigma_h': d['sigma_h'][n],
+               'cov_eh_mat': d['cov_eh_mat'][n], 'd_eh': d['d_eh'][n],
+               'd_exc': d['d_exc'][n], 'R_eh': d['R_eh'][n]}
+        want = {'c_n': c, 'r_e': r_e, 'r_h': r_h, 'sigma_e': sig_e, 'sigma_h': sig_h,
+                'cov_eh_mat': cov, 'd_eh': np.linalg.norm(r_h - r_e),
+                'd_exc': np.sqrt(d_exc2), 'R_eh': np.trace(cov) / (sig_e * sig_h)}
+        for k in got:
+            worst = max(worst, np.abs(np.asarray(got[k]) - np.asarray(want[k])).max())
+    ok &= check(worst < tol, 'module moments equal the grid oracle for 2 random (X, Y)',
+                f'max |d| {worst:.1e}, grid orthonormality error {err_s:.1e}')
 
     print('\n' + ('All exciton descriptor checks passed.' if ok
                   else 'FAILURES DETECTED'))

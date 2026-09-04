@@ -58,9 +58,12 @@ def exciton_descriptors(mf, mol, nocc, X, Y):
         ⟨r_e⟩  = [Σ_iab X_ia µ_ab X_ib + Σ_ija Y_ia µ_ij Y_ja] / c_n
         ⟨r_h²⟩, ⟨r_e²⟩ likewise with M in place of µ
         ⟨r_e^µ r_h^ν⟩ = [Σ_ijab X_ia µ_ab X_jb µ'_ji + Σ_ijab Y_ia µ_ij Y_jb µ'_ab
-                         + Σ_ijab X_ia µ_aj Y_jb µ'_ib + (µ ↔ ν)] / c_n
+                         + 2 Σ_ijab X_ia µ_aj Y_jb µ'_ib] / c_n
 
-    where µ carries the electron component and µ' the hole component. Then
+    where µ carries the electron component and µ' the hole component; the X-Y
+    cross term appears twice in Ψ_n² with the same operator, so its factor is 2
+    and not a sum with the (µ ↔ ν) transpose, which would differ off the
+    diagonal. Then
 
         d_eh   = |⟨r_h⟩ - ⟨r_e⟩|
         σ_e    = √(⟨r_e²⟩ - ⟨r_e⟩²),   σ_h = √(⟨r_h²⟩ - ⟨r_h⟩²)
@@ -138,11 +141,13 @@ def exciton_descriptors(mf, mol, nocc, X, Y):
     w = np.einsum('nia,xij->nxja', U, d_oo)              # sum_i Y_ia mu_ij
     v = np.einsum('nxja,njb->nxab', w, U)                # sum_j w_ja Y_jb
     yy = np.einsum('nxab,yab->nxy', v, d_vv)             # sum_ab v_ab mu_ab
-    #   XY: sum_ijab X_ia mu_aj Y_jb mu_ib, and YX = XY with x and y exchanged
+    #   XY: sum_ijab X_ia mu_aj Y_jb mu_ib, entering twice: Psi^2 holds the X-Y
+    #   product twice with the same operator, so the second copy is not the
+    #   transpose in (x, y) (the transpose would differ off the diagonal).
     w = np.einsum('nia,xja->nxij', T, d_ov)              # sum_a X_ia mu_ja
     v = np.einsum('nxij,njb->nxib', w, U)                # sum_j w_ij Y_jb
     xy = np.einsum('nxib,yib->nxy', v, d_ov)             # sum_ib v_ib mu_ib
-    r_eh = (xx + yy + xy + xy.transpose(0, 2, 1)) / c_n[:, None, None]
+    r_eh = (xx + yy + 2.0 * xy) / c_n[:, None, None]
 
     # COV_eh^xy = <r_e^x r_h^y> - <r_e^x><r_h^y>; the scalar COV_eh is its trace
     cov_mat = r_eh - np.einsum('nx,ny->nxy', r_e, r_h)
