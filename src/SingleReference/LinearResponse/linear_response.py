@@ -111,11 +111,29 @@ class LinearResponseSolver:
     def _get_f_rpa(self, d, w, is_imaginary):
         return imaginary_frequency._f_rpa(self, d, w, is_imaginary)
 
-    def build_casida_matrices(self, nocc, lBSE=False, W_aux=None, triplet=False):
+    def build_casida_matrices(self, nocc, lBSE=False, W_aux=None, triplet=False,
+                              eps_screen=None):
         """
         Builds the Casida matrices A and B.
         Dispatches to _build_block_df or _build_block_full.
+
+        eps_screen: evaluate the BSE screening at these orbital energies instead
+        of the ones on the diagonal. BSE@G0W0 needs exactly that split -- the
+        diagonal carries the quasiparticle energies while W is screened at the
+        mean-field ones. A three-index solver takes its whole kernel from W_aux
+        and so gets the split by construction; the 4-center builder rebuilds the
+        direct term itself and has to be told. Full ERIs, restricted only.
         """
+        if eps_screen is not None:
+            if self.spin_mode == 'unrestricted':
+                raise NotImplementedError(
+                    'eps_screen is restricted-only; the unrestricted 4-center '
+                    'block screens at its own eps_a/eps_b.')
+            if self.df_coeff is not None or self.coeff_ov is not None:
+                raise ValueError(
+                    'eps_screen does not apply to a three-index solver: its '
+                    'kernel is screened entirely by W_aux, so build W_aux at '
+                    'those energies instead.')
         if self.spin_mode == 'unrestricted':
             nocc_a, nocc_b = nocc
             occ_a, virt_a = self._get_occ_virt_indices(self.eps_a, nocc_a)
@@ -175,7 +193,8 @@ class LinearResponseSolver:
             else:
                 A, B = self._build_block_full(
                     self.eps, occ, virt, lBSE, W_aux, factor=factor, 
-                    eri_all=self.eri_chemist, spin_channel='restricted', nocc=nocc
+                    eri_all=self.eri_chemist, spin_channel='restricted', nocc=nocc,
+                    eps_screen=eps_screen
                 )
             return A, B
 
@@ -321,7 +340,8 @@ class LinearResponseSolver:
             B = factor * V_iajb - W_swap_att
             return A, B
 
-    def _build_block_full(self, eps, occ, virt, lBSE, W_aux, factor, eri_all, spin_channel, nocc=None):
+    def _build_block_full(self, eps, occ, virt, lBSE, W_aux, factor, eri_all, spin_channel, nocc=None,
+                          eps_screen=None):
         nocc_val = len(occ)
         nvirt_val = len(virt)
         n_pair = nocc_val * nvirt_val
@@ -394,8 +414,15 @@ class LinearResponseSolver:
                     else:
                         W_swap_att_raw = W_aux[n_pair:, n_pair:]
                 else:
+                    # diag_d sets the transition energies of the A matrix;
+                    # the polarizability that screens the kernel need not use
+                    # the same ones, so it gets its own gaps. Defaults to eps,
+                    # which is the pre-existing behaviour.
+                    eps_scr = eps if eps_screen is None else eps_screen
+                    diag_scr = (eps_scr[virt][None, :]
+                                - eps_scr[occ][:, None]).ravel()
                     rpa_factor = 2.0
-                    f = self._get_f_rpa(diag_d, 0.0, is_imaginary=False)
+                    f = self._get_f_rpa(diag_scr, 0.0, is_imaginary=False)
                     chi0 = np.diag(rpa_factor * f)
                     chi = chi0 @ np.linalg.inv(np.eye(n_pair) - V_iajb @ chi0)
                     

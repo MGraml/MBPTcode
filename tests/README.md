@@ -31,7 +31,7 @@ optional third-party one.
 | imaginary axis and time | `test_imaginary_axis_gw`, `test_imaginary_axis_gw_dft`, `test_sigma_blocking_and_screening`, `test_mpi_grid_distribution` |
 | grids | `test_grids`, `test_minimax_tau_grid`, `test_time_frequency_grid`, `test_matsubara_ir` |
 | ISDF factorization | `test_isdf_jk`, `test_frame_sign_convention`, `test_grid_radii_optimizer`, `test_static_exchange_routes` |
-| BSE | `test_davidson_casida`, `test_davidson_isdf_bse`, `test_davidson_benzene_bse`, `test_bse_isdf_driver` |
+| BSE | `test_davidson_casida`, `test_davidson_isdf_bse`, `test_davidson_benzene_bse`, `test_bse_isdf_driver`, `test_bse_screening_energies` |
 | solvent | `test_solvent_screening` |
 | distributed linear algebra | `test_numroc` |
 
@@ -54,6 +54,13 @@ the next one assumes:
   from the mean field's own K inherits the SCF route's error at first order, so
   this pins the streamed density-fitted build against the stored-tensor one and
   against the routing.
+
+`test_bse_screening_energies` guards the other half of the same question: not
+which basis W is expressed in, but which ENERGIES it is screened at. The BSE
+diagonal carries the quasiparticle energies while W is screened at the
+mean-field ones, and a 4-center solver has to be told that with `eps_screen=`
+because it rebuilds the direct term itself. Getting it wrong is worth more than
+the auxiliary basis error it looks like, and does not shrink under refinement.
 
 `test_davidson_isdf_bse` is the gauge test of the pair: the matrix-free BSE
 action against the dense Casida solver, plus the negative control of pairing
