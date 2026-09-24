@@ -24,6 +24,8 @@ import os
 
 import numpy as np
 
+from src.Base.utils.linearAlgebra.diagonalization import _MAX_MESSAGE
+
 MPI = None
 _HAS_MPI = False
 _TRIED = False
@@ -73,11 +75,17 @@ def partition(n, rank, size):
 
 
 def reduce_sum(a, comm):
-    """In-place all-reduce of a numpy array. No-op without a comm."""
+    """In-place all-reduce of a numpy array. No-op without a comm.
+
+    Reduced in pieces of at most _MAX_MESSAGE elements, since an MPI count is a
+    C int: a chi0 of 30 frequencies x naux^2 passes 2**31 - 1 near naux = 8500.
+    """
     if comm is None or comm.Get_size() == 1:
         return a
     buf = np.ascontiguousarray(a)
-    comm.Allreduce(MPI.IN_PLACE, buf, op=MPI.SUM)
+    flat = buf.reshape(-1)            # a view, so the sums land in buf
+    for k in range(0, flat.size, _MAX_MESSAGE):
+        comm.Allreduce(MPI.IN_PLACE, flat[k:k + _MAX_MESSAGE], op=MPI.SUM)
     if buf is not a:
         a[...] = buf
     return a
