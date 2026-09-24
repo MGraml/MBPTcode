@@ -61,12 +61,15 @@ class ThreadComm:
         self.rank, self.w = rank, world
 
     def Get_rank(self):
+        """This thread's rank."""
         return self.rank
 
     def Get_size(self):
+        """The number of thread ranks."""
         return self.w.size
 
     def bcast(self, obj, root=0):
+        """Hand `obj` from root to every other rank, as mpi4py's bcast."""
         if self.rank == root:
             for dest in range(self.w.size):
                 if dest != root:
@@ -81,11 +84,13 @@ class ThreadComm:
         self.w.sizes.append(buf.size)
 
     def Send(self, buf, dest, tag):
+        """Post a copy of `buf` to `dest`; refused over the limit."""
         buf = np.asarray(buf)
         self._count(buf)
         self.w.boxes[self.rank, dest].put((tag, buf.copy()))
 
     def Recv(self, buf, source, tag):
+        """Fill `buf` from the next message of `source`, which must match."""
         if buf.size > self.w.limit:
             raise RuntimeError(f'{buf.size} elements in one message, '
                                f'limit {self.w.limit}')
@@ -96,6 +101,7 @@ class ThreadComm:
         buf[...] = data
 
     def Allreduce(self, sendbuf, recvbuf, op):
+        """Sum `recvbuf` over all ranks in place; refused over the limit."""
         # in place, as reduce_sum calls it; the op is taken to be the sum
         if sendbuf is not mg.MPI.IN_PLACE:
             raise RuntimeError('reduce_sum is expected to reduce in place')
@@ -188,12 +194,14 @@ def with_cap(cap, fn, *args):
 
 
 def check(ok, label, detail=''):
+    """Print one verdict line and return `ok` as a bool."""
     tail = f'   ({detail})' if detail else ''
     print(f"  [{'ok' if ok else 'FAIL'}] {label}" + tail)
     return bool(ok)
 
 
 def main():
+    """Run every section; 0 when all pass, else 1."""
     ok = True
     mg.MPI = types.SimpleNamespace(IN_PLACE=object(), SUM=object())
 
