@@ -180,17 +180,22 @@ def all_reduce(size, limit, make):
 
 
 def with_cap(cap, fn, *args):
-    """Call fn with both modules' _MAX_MESSAGE lowered to cap."""
-    saved = dg._MAX_MESSAGE, getattr(mg, '_MAX_MESSAGE', None)
-    dg._MAX_MESSAGE = mg._MAX_MESSAGE = cap
+    """Call fn with both modules' _MAX_MESSAGE lowered to cap.
+
+    Code without the cap does not read it, so there the call sends whole arrays
+    and the limit refuses them: a FAIL, not a crash.
+    """
+    saved = {m: getattr(m, '_MAX_MESSAGE', None) for m in (dg, mg)}
+    for m in saved:
+        m._MAX_MESSAGE = cap
     try:
         return fn(*args)
     finally:
-        dg._MAX_MESSAGE = saved[0]
-        if saved[1] is None:
-            del mg._MAX_MESSAGE
-        else:
-            mg._MAX_MESSAGE = saved[1]
+        for m, value in saved.items():
+            if value is None:
+                del m._MAX_MESSAGE
+            else:
+                m._MAX_MESSAGE = value
 
 
 def check(ok, label, detail=''):
