@@ -17,6 +17,8 @@ message was split.
 
 Run: python tests/test_mpi_message_cap.py
 """
+import contextlib
+import io
 import os
 import queue
 import sys
@@ -51,7 +53,18 @@ class World:
         self.boxes = {(a, b): queue.Queue()
                       for a in range(size) for b in range(size) if a != b}
         self.barrier = threading.Barrier(size)
-        self.table = {}
+        self.table, self.aborted = {}, []
+
+
+class Aborted(Exception):
+    """What ThreadComm.Abort raises to end a thread rank."""
+
+
+class Unallocatable:
+    """Stands in for an array whose contiguous copy does not fit on one rank."""
+
+    def __array__(self, dtype=None, copy=None):
+        raise MemoryError('no room for the contiguous copy')
 
 
 class ThreadComm:
@@ -100,6 +113,12 @@ class ThreadComm:
                                f'got tag {got_tag} shape {data.shape}')
         buf[...] = data
 
+    def Abort(self, errorcode=0):
+        """Record the abort and wake every rank waiting in a collective."""
+        self.w.aborted.append((self.rank, errorcode))
+        self.w.barrier.abort()
+        raise Aborted(errorcode)
+
     def Allreduce(self, sendbuf, recvbuf, op):
         """Sum `recvbuf` over all ranks in place; refused over the limit."""
         # in place, as reduce_sum calls it; the op is taken to be the sum
@@ -134,7 +153,7 @@ def on_threads(size, limit, body):
         t.join()
     errors = [f'rank {r}: {v}' for r, v in sorted(out.items())
               if isinstance(v, Exception)]
-    return out, (errors[0] if errors else ''), world.sizes
+    return out, (errors[0] if errors else ''), world
 
 
 def solver_stub(n, nb, pr, pc):
@@ -153,7 +172,8 @@ def round_trip(n, nb, pr, pc, limit):
         local = dg.scatter_block_cyclic(M if rank == 0 else None, solver, comm)
         return local, dg.gather_block_cyclic(local, n, solver, comm)
 
-    out, err, sizes = on_threads(pr * pc, limit, body)
+    out, err, world = on_threads(pr * pc, limit, body)
+    sizes = world.sizes
     if err:
         return False, err, sizes
     chunks_ok = all(
@@ -171,7 +191,8 @@ def all_reduce(size, limit, make):
         back = mg.reduce_sum(a, comm)
         return back is a, a
 
-    out, err, sizes = on_threads(size, limit, body)
+    out, err, world = on_threads(size, limit, body)
+    sizes = world.sizes
     if err:
         return False, err, sizes
     same = all(out[r][0] for r in range(size))
@@ -252,6 +273,21 @@ def main():
     passed, err, sizes = all_reduce(8, INT_MAX, cplx)
     ok &= check(passed and len(sizes) == 8, 'one Allreduce per rank',
                 err or f'{len(sizes)} messages for 8 ranks')
+
+    print('\n=== 6. a failure on one rank aborts the reduction, not strands it ===')
+    def body(rank, comm):
+        return mg.reduce_sum(Unallocatable() if rank == 2 else np.ones(1173), comm)
+
+    printed = io.StringIO()
+    with contextlib.redirect_stderr(printed):
+        out, err, world = on_threads(8, INT_MAX, body)
+    ok &= check(world.aborted[:1] == [(2, 1)]
+                and all(isinstance(v, Aborted) for v in out.values()),
+                'the failing rank aborts with code 1, and no rank returns',
+                f'aborts {world.aborted[:3]}, outcomes '
+                f'{sorted({type(v).__name__ for v in out.values()})}')
+    ok &= check('no room for the contiguous copy' in printed.getvalue(),
+                'the failing rank prints its error before the abort')
 
     print('\nALL PASSED' if ok else '\nFAILURES DETECTED')
     return 0 if ok else 1
