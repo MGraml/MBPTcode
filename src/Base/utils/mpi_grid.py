@@ -21,6 +21,8 @@ this and always scales.
 Set MBPT_USE_MPI=0 to force the serial path.
 """
 import os
+import sys
+import traceback
 
 import numpy as np
 
@@ -79,13 +81,20 @@ def reduce_sum(a, comm):
 
     Reduced in pieces of at most _MAX_MESSAGE elements, since an MPI count is a
     C int: a chi0 of 30 frequencies x naux^2 passes 2**31 - 1 near naux = 8500.
+    A failure on one rank prints its error and aborts the communicator, since
+    the other ranks wait in the same collective until the walltime otherwise.
     """
     if comm is None or comm.Get_size() == 1:
         return a
-    buf = np.ascontiguousarray(a)
-    flat = buf.reshape(-1)            # a view, so the sums land in buf
-    for k in range(0, flat.size, _MAX_MESSAGE):
-        comm.Allreduce(MPI.IN_PLACE, flat[k:k + _MAX_MESSAGE], op=MPI.SUM)
+    try:
+        buf = np.ascontiguousarray(a)
+        flat = buf.reshape(-1)        # a view, so the sums land in buf
+        for k in range(0, flat.size, _MAX_MESSAGE):
+            comm.Allreduce(MPI.IN_PLACE, flat[k:k + _MAX_MESSAGE], op=MPI.SUM)
+    except Exception as exc:
+        traceback.print_exception(exc)
+        sys.stderr.flush()
+        comm.Abort(1)
     if buf is not a:
         a[...] = buf
     return a
