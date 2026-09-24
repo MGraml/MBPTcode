@@ -18,6 +18,7 @@ All use H2O/cc-pVDZ unless noted, so the numbers are directly comparable
 | `12_evgw.py` | the eigenvalue-self-consistent loop: cycle 1 is G0W0, the fixed point sits above it |
 | `13_solvated_gw_bse.py` | GW and BSE in a continuum, with the ground-state and response halves separated |
 | `14_cp2k_aug_molopt.py` | CP2K's aug-SZV-MOLOPT-ae basis with its RI tier, read from CP2K at run time; G0W0 and dense BSE |
+| `15_distributed_eigensolve.py` | the dense Casida solve on ELPA over MPI ranks (`srun -n 4`), with the same numbers as one process |
 
 The auxiliary basis is a choice, not a detail. `<basis>-ri` is an MP2
 correlation-fitting set for occupied-virtual products, while J, K and the BSE
@@ -78,6 +79,8 @@ only valid for the bare amplitude.
 14  G0W0 HOMO = -9.754 eV   LUMO = 1.659 eV   BSE@G0W0 = 2.733, 6.158, 7.199 eV
     (formaldehyde, aug-SZV-MOLOPT-ae, 116 auxiliary functions at Delta-I 1e-4;
     that tier is 27 meV from the exact tensor on the singlets, the tightest 1.6 meV)
+15  RPA excitation energies = 18.977, 20.675, 21.155, 22.831 eV, 95 pair states,
+    the same with distributed = True on 4 ranks and False on one process
 ```
 
 ## Large systems
