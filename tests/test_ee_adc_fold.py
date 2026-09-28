@@ -17,9 +17,17 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
   4. solve_folded at adc2 reproduces the full spin-free ADC(2) Davidson roots, three
      singlets and three triplets, to 1e-5 eV, with T1 against the full eigenvector's
      singles weight to 1e-4, every root under eight Newton steps; t_min=1.0 forces the
-     fixed-point loop to the same roots; H2/STO-3G triplets warn on a short channel.
+     fixed-point loop to the same roots; H2/STO-3G triplets warn on a short channel
+     and the one root equals the full solve.
   5. CH4 / cc-pVDZ (not NH3: the rounded C3v geometry splits the E pair by 2e-4 eV):
-     the degenerate T2 singlet triple is followed without a skip.
+     the degenerate T2 singlet triple is followed without a skip, its partners
+     orthonormal, on the dense and on the Davidson branch.
+  6. the Davidson branch equals the dense one on water; spin=None equals the full
+     solve over both channels.
+  7. gf2: the fold equals the full gf2 channel solve; the dense integral route
+     equals the DF route with exact factors.
+  8. pieces=True with parity and en_dress at gf2 raise ValueError; an exhausted
+     step budget reports converged False with a warning; no input is mutated.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -204,6 +212,23 @@ def check_solve_folded(mf, eps, B, no):
     ok &= check(res2.omega.size == 1 and fewer,
                 'short channel warns and returns what it has',
                 f'{res2.omega.size} root(s), {len(caught)} warning(s)')
+    # nocc = nvirt = 1: every reshape of the layout is degenerate. HeH+, not H2,
+    # whose g/u symmetry cuts the one single from the one double
+    mol3 = gto.M(atom='He 0 0 0; H 0 0 0.77', basis='sto-3g', charge=1, verbose=0)
+    mf3 = scf.RHF(mol3).density_fit()
+    mf3.conv_tol = 1e-12
+    mf3.kernel()
+    eps3 = np.asarray(get_orbital_energies(mf3, representation='spatial'), float)
+    B3 = DFIntegrals.from_scf(mol3, mf3).B_aa
+    _, _, _, P3 = ee_r_sigma_df.build_operator(eps3, B3, 1, level='adc2',
+                                               pieces=True)
+    res3 = ee_fold.solve_folded(P3, 1, spin='singlet')
+    e3, _ = solve_ee_adc(mf3, level='adc2', nroots=1, df=True, spin='singlet',
+                         conv_tol=1e-10)
+    d = abs(float(res3.omega[0]) - float(e3[0])) * ev
+    ok &= check(d < 1e-5 and res3.t1[0] < 1.0,
+                'HeH+ singlet (nocc = nvirt = 1): folded equals the full solve',
+                f'|d| {d:.1e} eV, T1 {res3.t1[0]:.6f}')
     return ok
 
 
@@ -239,9 +264,105 @@ def check_degenerate_set():
     d = np.abs(res.omega - e_full) * ev
     ok &= check(float(d.max()) < 1e-5, 'all four folded roots equal the full solve',
                 f'max |d| {d.max():.1e} eV')
-    S = res.y.T @ res.y
-    ov = float(np.max(np.abs(S - np.diag(np.diag(S)))))
-    ok &= check(ov < 1e-6, 'the followed vectors are distinct', f'max overlap {ov:.1e}')
+    for dense_limit, route in ((2000, 'dense'), (0, 'Davidson')):
+        res = ee_fold.solve_folded(P, 4, spin='singlet', dense_limit=dense_limit)
+        d = np.abs(res.omega - e_full) * ev
+        ok &= check(float(d.max()) < 1e-5,
+                    f'{route}: all four folded roots equal the full solve',
+                    f'max |d| {d.max():.1e} eV')
+        # within the triple; distinct roots sit at different w, so their singles
+        # parts need not be orthogonal
+        S = res.y[:, :3].T @ res.y[:, :3]
+        ov = float(np.max(np.abs(S - np.eye(3))))
+        ok &= check(ov < 1e-10, f'{route}: the triple partners are orthonormal',
+                    f'max |y^T y - 1| {ov:.1e}')
+    return ok
+
+
+def check_routes_and_channels(mf, eps, B, no):
+    """The Davidson branch of the fold (dense_limit=0) against the dense one, and
+    spin=None against the full solve over both channels."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
+    ok = True
+    ev = HARTREE_TO_EV
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    for spin in ('singlet', 'triplet'):
+        a = ee_fold.solve_folded(P, 3, spin=spin)
+        b = ee_fold.solve_folded(P, 3, spin=spin, dense_limit=0)
+        d = float(np.max(np.abs(a.omega - b.omega))) * ev
+        ok &= check(d < 1e-7 and b.converged.all(),
+                    f'{spin}: Davidson branch equals the dense branch',
+                    f'|d| {d:.1e} eV')
+    e_full, _ = solve_ee_adc(mf, level='adc2', nroots=6, df=True, conv_tol=1e-10)
+    res = ee_fold.solve_folded(P, 6, spin=None)
+    d = float(np.max(np.abs(res.omega - np.asarray(e_full)))) * ev
+    ok &= check(d < 1e-5, 'spin=None: six folded roots equal the full solve',
+                f'|d| {d:.1e} eV')
+    return ok
+
+
+def check_gf2_solves(mf, eps, B, no):
+    """gf2 end to end: the fold against the full gf2 channel solve, and the dense
+    integral route against the DF route with exact factors."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
+    ok = True
+    ev = HARTREE_TO_EV
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='gf2', pieces=True)
+    for spin in ('singlet', 'triplet'):
+        e_full, _ = solve_ee_adc(mf, level='gf2', nroots=3, df=True, spin=spin,
+                                 conv_tol=1e-10)
+        res = ee_fold.solve_folded(P, 3, spin=spin)
+        d = float(np.max(np.abs(res.omega - np.asarray(e_full)))) * ev
+        ok &= check(d < 1e-5 and res.converged.all(),
+                    f'gf2 {spin}: folded equals the full solve', f'|d| {d:.1e} eV')
+    mol = mf.mol
+    mf0 = scf.RHF(mol)
+    mf0.conv_tol = 1e-12
+    mf0.kernel()
+    e_dense, _ = solve_ee_adc(mf0, level='gf2', nroots=3, df=False, conv_tol=1e-10)
+    e_exact, _ = solve_ee_adc(mf0, level='gf2', nroots=3, df=True, auxbasis='exact',
+                              conv_tol=1e-10)
+    d = float(np.max(np.abs(np.asarray(e_dense) - np.asarray(e_exact)))) * ev
+    ok &= check(d < 1e-6, 'gf2: dense integral route equals DF with exact factors',
+                f'|d| {d:.1e} eV')
+    return ok
+
+
+def check_boundaries(mf, eps, B, no):
+    """The refusals and the step budget; inputs left as they were handed in."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
+    ok = True
+    try:
+        ee_r_sigma_df.build_operator(eps, B, no, level='adc2', parity=1.0,
+                                     pieces=True)
+        ok &= check(False, 'pieces=True with parity raises ValueError')
+    except ValueError as exc:
+        ok &= check('parity' in str(exc), 'pieces=True with parity raises ValueError')
+    try:
+        solve_ee_adc(mf, level='gf2', nroots=1, df=True, en_dress=True)
+        ok &= check(False, 'en_dress at gf2 raises ValueError')
+    except ValueError as exc:
+        ok &= check('en_dress' in str(exc), 'en_dress at gf2 raises ValueError',
+                    str(exc)[:60])
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    D0, M0 = P['D'].copy(), P['M'].get('aaaa').copy()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res = ee_fold.solve_folded(P, 1, spin='singlet', max_newton=1)
+    budget = any('not converged' in str(w.message) for w in caught)
+    ok &= check(not res.converged[0] and budget,
+                'an exhausted step budget reports converged False and warns',
+                f'converged {res.converged[0]}, steps {res.steps[0]}')
+    matvec, _, diag_s, _, _ = ee_fold.folded_operator(P, 0.3, spin='singlet')
+    u = np.linspace(-1.0, 1.0, diag_s.size)
+    u0 = u.copy()
+    matvec(u)
+    same = (np.array_equal(u, u0) and np.array_equal(P['D'], D0)
+            and np.array_equal(P['M'].get('aaaa'), M0))
+    ok &= check(same, 'matvec and solve_folded leave their inputs untouched')
     return ok
 
 
@@ -260,6 +381,9 @@ def main():
     all_ok &= check_folded_operator(mf, eps, B, no)
     all_ok &= check_solve_folded(mf, eps, B, no)
     all_ok &= check_degenerate_set()
+    all_ok &= check_routes_and_channels(mf, eps, B, no)
+    all_ok &= check_gf2_solves(mf, eps, B, no)
+    all_ok &= check_boundaries(mf, eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 

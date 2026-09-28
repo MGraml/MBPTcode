@@ -253,7 +253,8 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     T1 ≥ t_min, else the DIIS-accelerated fixed point ω_{k+1} = λ. Stops at
     |λ - ω_k| < tol_omega; a root that exhausts max_newton (or max_fixed) steps
     is returned with converged False and a RuntimeWarning. The roots come back
-    sorted by ω, whatever the order of their seeds.
+    sorted by ω, whatever the order of their seeds, and the partners of a
+    degenerate level (ω closer than tol_omega) mutually orthonormal.
 
     Parameters
     ----------
@@ -330,5 +331,19 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         loop.append(mode)
     # the fold can reorder the seeds: a lower root of M may land above a higher
     order = np.argsort(omega, kind='stable')
-    return FoldResult(omega[order], y_out[:, order], t1_out[order], steps[order],
+    omega, y_out = omega[order], y_out[:, order]
+    # a degenerate level has no preferred basis, and the Davidson follow does not
+    # keep its partners orthogonal: Löwdin, y ← y (yᵀy)^(-1/2), per level. Its
+    # partners agree to tol_omega only; distinct roots sit at different ω, so
+    # their singles parts need not be orthogonal and are left alone
+    start = 0
+    for stop in range(1, nroots + 1):
+        if stop < nroots and omega[stop] - omega[stop - 1] < tol_omega:
+            continue
+        if stop - start > 1:
+            blk = y_out[:, start:stop]
+            s, U = np.linalg.eigh(blk.T @ blk)
+            y_out[:, start:stop] = blk @ (U / np.sqrt(s)) @ U.T
+        start = stop
+    return FoldResult(omega, y_out, t1_out[order], steps[order],
                       [loop[i] for i in order], converged[order], embed)
