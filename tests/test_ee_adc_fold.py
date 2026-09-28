@@ -366,6 +366,26 @@ def check_boundaries(mf, eps, B, no):
     return ok
 
 
+def check_diis_step():
+    """The fixed-point extrapolation is well posed at every history length: a
+    1e-14 relative change of the residuals moves it by rounding only, and on a
+    residual linear in w it lands on the root."""
+    from src.SingleReference.ADC.eeADC.ee_fold import _diis_step
+    ok = True
+    w_star = 0.3
+    om = np.array([0.40, 0.36, 0.33, 0.315, 0.308, 0.304])
+    for m in range(2, 7):
+        o = om[:m]
+        e = (w_star - o) + 0.3 * (w_star - o) ** 2        # a curved residual
+        a = _diis_step(list(o), list(e))
+        b = _diis_step(list(o), list(e * (1.0 + 1e-14 * np.arange(1, m + 1))))
+        lin = _diis_step(list(o), list(0.7 * (w_star - o)))
+        ok &= check(abs(a - b) < 1e-10 and abs(lin - w_star) < 1e-12,
+                    f'fixed-point step well posed at history {m}',
+                    f'|d| perturbed {abs(a - b):.1e}, linear {abs(lin - w_star):.1e}')
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -384,6 +404,7 @@ def main():
     all_ok &= check_routes_and_channels(mf, eps, B, no)
     all_ok &= check_gf2_solves(mf, eps, B, no)
     all_ok &= check_boundaries(mf, eps, B, no)
+    all_ok &= check_diis_step()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
