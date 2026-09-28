@@ -42,6 +42,7 @@ from src.Solvers.davidson import overlap_pick, solve_symmetric
 
 FOLD_LEVELS = ('adc2', 'gf2')
 _CHANNEL = {'singlet': +1.0, 'triplet': -1.0}
+_DEGENERATE = 1e-8      # Hartree: eigenvalues closer than this are one level
 
 
 def singles_flat_to_sb(u, no, nv):
@@ -201,8 +202,14 @@ def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
     if dense:
         A = dense_effective(matvec, n)
         w, v = np.linalg.eigh(A)
-        k = 0 if ref is None else int(np.argmax(np.abs(ref @ v)))
-        lam, y = float(w[k]), v[:, k]
+        if ref is None:
+            lam, y = float(w[0]), v[:, 0]
+        else:
+            k = int(np.argmax(np.abs(ref @ v)))
+            # a degenerate eigenspace has no preferred basis: follow ref's
+            # projection onto it, so partners seeded orthogonal stay orthogonal
+            cl = np.abs(w - w[k]) < _DEGENERATE
+            lam, y = float(w[k]), v[:, cl] @ (v[:, cl].T @ ref)
     else:
         if ref is None:
             e, X, conv = solve_symmetric(matvec, diag_s, nroots=nfollow,
