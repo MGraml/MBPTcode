@@ -82,10 +82,47 @@ def check_pieces(eps, B, no):
     return ok
 
 
+def check_gf2(eps, B, no):
+    """eq 53 of Monino-Loos 2023: ADC(2) with the singles block cut back to A^HF."""
+    ok = True
+    nv = len(eps) - no
+    _, _, d_gf2, P2 = ee_r_sigma_df.build_operator(eps, B, no, level='gf2',
+                                                   pieces=True)
+    _, _, d_adc2, P1 = ee_r_sigma_df.build_operator(eps, B, no, level='adc2',
+                                                    pieces=True)
+    aop1, _, _ = ee_r_sigma_df.build_operator(eps, B, no, level='adc1')
+    ok &= check(d_gf2 == d_adc2, 'gf2 dimensions equal adc2')
+    ok &= check(ee_r_sigma._BLOCK_ORDERS['gf2'] == (1, 1, 0),
+                'gf2 block order (1, 1, 0)')
+    be = P2['be']
+    rng = np.random.default_rng(11)
+    vec = rng.standard_normal(d_adc2['nH'])
+    y1, Y = ee_r_sigma.to_blocks(vec, no, nv, 'adc2')
+    # singles block: gf2's M on y1 equals the adc1 operator on the singles part
+    w_gf2 = ee_r_sigma.from_blocks(be.ein('iajb,jb->ia', P2['M'], y1), SB(), no, nv,
+                                   'adc1')
+    w_adc1 = aop1(vec[:2 * no * nv])
+    err = float(np.max(np.abs(w_gf2 - w_adc1)))
+    ok &= check(err < 1e-12, 'gf2 singles block equals adc1 (A^HF)', f'{err:.1e}')
+    # couplings and doubles diagonal: identical to adc2's
+    ok &= check(_sb_close(P2['V'](y1), P1['V'](y1)), 'gf2 coupling V equals adc2')
+    ok &= check(_sb_close(P2['Vt'](Y), P1['Vt'](Y)), 'gf2 coupling Vt equals adc2')
+    ok &= check(np.allclose(P2['D'], P1['D'], atol=0, rtol=0), 'gf2 D equals d_ijab')
+    return ok
+
+
+def _sb_close(A, Bk, tol=1e-12):
+    keys = set(A.keys()) | set(Bk.keys())
+    return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
+                           Bk.get(k) if Bk.get(k) is not None else 0.0,
+                           atol=tol, rtol=0) for k in keys)
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water_df()
     all_ok &= check_pieces(eps, B, no)
+    all_ok &= check_gf2(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
