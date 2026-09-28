@@ -210,12 +210,15 @@ def build_operator(eps, B, nocc_spatial, level='adc3', en_dress=None,
 
     pieces: True also returns the blocks the doubles fold of ee_fold needs,
     (aop, diag, dims, pieces) with pieces = {'M', 'V', 'Vt', 'D', 'level',
-    'no', 'nv', 'be'}: M the singles block M_ia,jb (SB, spin-blocked), V the
-    coupling W^ab_ij(S) as a callable on an SB singles vector, Vt its transpose
-    W^a_i(D) on an SB doubles vector, D = d_ijab the doubles diagonal, shape
-    (no, no, nv, nv), index order (i, j, a, b). Only a level whose doubles
-    block is that bare diagonal (o_dd = 0: adc2, gf2) is accepted, and only
-    without `parity`: the fold takes its spin channel on the singles alone."""
+    'no', 'nv', 'be'}: M the singles block M_ia,jb (SB, blocks of shape
+    (no, nv, no, nv), index order (i, a, j, b)), V the coupling W^ab_ij(S) as
+    a callable from an SB singles vector (blocks (no, nv), index order (i, a))
+    to an SB doubles vector (blocks (no, no, nv, nv), index order
+    (i, j, a, b)), Vt its transpose W^a_i(D) the other way, D = d_ijab the
+    doubles diagonal, shape (no, no, nv, nv), index order (i, j, a, b). Only a
+    level whose doubles block is that bare diagonal (o_dd = 0: adc2, gf2) is
+    accepted, and only without `parity`: the fold takes its spin channel on the
+    singles alone."""
     if level not in LEVELS:
         raise ValueError(f'level={level!r}; expected one of {LEVELS}')
     no, norb = nocc_spatial, len(eps)

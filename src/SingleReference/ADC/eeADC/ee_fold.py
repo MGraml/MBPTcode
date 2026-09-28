@@ -7,11 +7,14 @@ can be eliminated without approximation,
     [ M    Vᵀ ] [ y ]       [ y ]                 Y = (ω - D)⁻¹ V y
     [ V    D  ] [ Y ]  =  ω [ Y ]      ==>        A_eff(ω) y = ω y,
 
-    A_eff(ω) = M - Vᵀ (D - ω)⁻¹ V .
+    A_eff(ω)_ia,jb = M_ia,jb - sum_K V_K,ia V_K,jb / (D_K - ω) ,
 
-For the eigenpair (λ(ω), y) of A_eff(ω) with yᵀy = 1,
+with ia, jb the singles and K the doubles of the flat adc2 layout, in whose
+metric the supermatrix is symmetric (K is a spin-resolved (k, l, c, d)).
+For the eigenpair (λ(ω), y) of A_eff(ω) with sum_ia y_ia² = 1,
 
-    dλ/dω = -‖(D - ω)⁻¹ V y‖²,      T1 = 1 / (1 - dλ/dω)      (singles weight),
+    dλ/dω = -sum_K (sum_jb V_K,jb y_jb)² / (D_K - ω)²,
+    T1 = 1 / (1 - dλ/dω)      (the singles weight of the full eigenvector),
 
 and self-consistency λ(ω) = ω is reached per root by Newton,
 
@@ -85,8 +88,10 @@ def folded_operator(pieces, omega, spin=None):
     Parameters
     ----------
     pieces : dict
-        From ``build_operator(..., pieces=True)``: 'M' (SB singles block), 'V'
-        and 'Vt' (coupling callables), 'D' (ndarray (no, no, nv, nv), index
+        From ``build_operator(..., pieces=True)``: 'M' (SB, blocks of shape
+        (no, nv, no, nv), index order (i, a, j, b)), 'V' (SB singles, blocks
+        (no, nv), (i, a) -> SB doubles, blocks (no, no, nv, nv), (i, j, a, b)),
+        'Vt' (the reverse map), 'D' (ndarray, shape (no, no, nv, nv), index
         order (i, j, a, b)), 'level', 'no', 'nv', 'be'.
     omega : float or None
         Frequency in Hartree; None gives the bare singles block M.
@@ -98,8 +103,8 @@ def folded_operator(pieces, omega, spin=None):
     matvec : callable
         u (n,) -> A_eff(ω) u (n,), n = 2 no nv or the channel's size.
     dmatvec : callable
-        u (n,) -> ‖(D - ω)⁻¹ V u‖² (a float), so that dλ/dω = -dmatvec(y) for a
-        unit eigenvector y; 0.0 when omega is None.
+        u (n,) -> sum_K (sum_jb V_K,jb u_jb)² / (D_K - ω)² (a float), so that
+        dλ/dω = -dmatvec(y) for a unit eigenvector y; 0.0 when omega is None.
     diag_s : ndarray, shape (n,)
         Diagonal of M on the channel's representative entries (preconditioner).
     embed, restrict : callables
@@ -134,7 +139,7 @@ def folded_operator(pieces, omega, spin=None):
         y1 = singles_flat_to_sb(embed(u), no, nv)
         w1 = be.ein('iajb,jb->ia', M, y1)                 # sum_jb M_ia,jb y_jb
         if denom is not None:
-            # - Vt (D - ω)⁻¹ V y : the folded doubles
+            # - sum_K V_K,ia (sum_jb V_K,jb y_jb) / (D_K - ω) : the folded doubles
             Y = be.divide(V(y1), denom)
             w1 = w1 - Vt(Y)
         return restrict(singles_sb_to_flat(w1, no, nv))
@@ -144,7 +149,8 @@ def folded_operator(pieces, omega, spin=None):
             return 0.0
         u = _check_vector(u, n)
         y1 = singles_flat_to_sb(embed(u), no, nv)
-        Yf = doubles_sb_to_flat(be.divide(V(y1), denom), no, nv)   # (D - ω)⁻¹ V y
+        # Y_K = sum_jb V_K,jb y_jb / (D_K - ω), flat; then sum_K Y_K²
+        Yf = doubles_sb_to_flat(be.divide(V(y1), denom), no, nv)
         return float(Yf @ Yf)
 
     return matvec, dmatvec, diag_s, embed, restrict
@@ -200,6 +206,7 @@ def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
     matvec, dmatvec, diag_s, embed, restrict = folded_operator(pieces, omega, spin)
     n = diag_s.size
     if dense:
+        # sum_q A_pq v_qm = w_m v_pm, A built from n matvecs
         A = dense_effective(matvec, n)
         w, v = np.linalg.eigh(A)
         if ref is None:
@@ -207,7 +214,8 @@ def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
         else:
             k = int(np.argmax(np.abs(ref @ v)))
             # a degenerate eigenspace has no preferred basis: follow ref's
-            # projection onto it, so partners seeded orthogonal stay orthogonal
+            # projection onto it, y_p = sum_m v_pm sum_q v_qm ref_q over the m
+            # with w_m = w_k, so partners seeded orthogonal stay orthogonal
             cl = np.abs(w - w[k]) < _DEGENERATE
             lam, y = float(w[k]), v[:, cl] @ (v[:, cl].T @ ref)
     else:
