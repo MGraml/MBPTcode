@@ -32,10 +32,13 @@ E. Monino and P.-F. Loos, J. Chem. Phys. 159, 034105 (2023), eq 53 (gf2).
 C. Hättig and F. Weigend, J. Chem. Phys. (2000), doi:10.1063/1.1290013 (the
 folded-doubles solver of RI-CC2).
 """
+import warnings
+
 import numpy as np
 
 from src.SingleReference.ADC.eeADC import ee_r_sigma as _r
 from src.SingleReference.ADC.eeADC.ee_spin_blocks import SB
+from src.Solvers.davidson import overlap_pick, solve_symmetric
 
 FOLD_LEVELS = ('adc2', 'gf2')
 _CHANNEL = {'singlet': +1.0, 'triplet': -1.0}
@@ -150,3 +153,167 @@ def dense_effective(matvec, n):
     """A_eff as an (n, n) array from n unit-vector matvecs, symmetrised."""
     A = np.column_stack([matvec(np.eye(n)[:, k]) for k in range(n)])
     return 0.5 * (A + A.T)
+
+
+class FoldResult:
+    """Per-root results of solve_folded.
+
+    omega : ndarray, shape (nroots,), Hartree, ascending
+    y : ndarray, shape (n, nroots), unit singles vectors in the channel basis
+    t1 : ndarray, shape (nroots,), singles weights in (0, 1]
+    steps : ndarray, shape (nroots,), outer iterations used
+    loop : list of str, 'newton' or 'fixed' per root
+    converged : ndarray, shape (nroots,), bool
+    embed : callable, channel vector -> full flat singles vector
+    """
+
+    def __init__(self, omega, y, t1, steps, loop, converged, embed):
+        self.omega, self.y, self.t1 = omega, y, t1
+        self.steps, self.loop, self.converged = steps, loop, converged
+        self.embed = embed
+
+
+def _diis_step(hist_omega, hist_err):
+    """Pulay step on the scalar history: ω_next = sum_k c_k λ_k with the c_k
+    minimising |sum_k c_k e_k| under sum_k c_k = 1, e_k = λ_k - ω_k."""
+    m = len(hist_err)
+    if m == 1:
+        return hist_omega[0] + hist_err[0]
+    e = np.asarray(hist_err)
+    Bm = np.empty((m + 1, m + 1))
+    Bm[:m, :m] = np.outer(e, e)
+    Bm[m, :], Bm[:, m], Bm[m, m] = -1.0, -1.0, 0.0
+    rhs = np.zeros(m + 1)
+    rhs[m] = -1.0
+    try:
+        c = np.linalg.solve(Bm, rhs)[:m]
+    except np.linalg.LinAlgError:
+        return hist_omega[-1] + hist_err[-1]
+    lam = np.asarray(hist_omega) + e
+    return float(c @ lam)
+
+
+def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
+    """(λ, y, T1) of A_eff(ω): the eigenpair of maximal overlap with ref
+    (ref None: the lowest), by eigh below dense_limit, else by Davidson."""
+    matvec, dmatvec, diag_s, embed, restrict = folded_operator(pieces, omega, spin)
+    n = diag_s.size
+    if dense:
+        A = dense_effective(matvec, n)
+        w, v = np.linalg.eigh(A)
+        k = 0 if ref is None else int(np.argmax(np.abs(ref @ v)))
+        lam, y = float(w[k]), v[:, k]
+    else:
+        if ref is None:
+            e, X, conv = solve_symmetric(matvec, diag_s, nroots=nfollow,
+                                         tol_residual=tol_residual, label=label)
+            k = 0
+        else:
+            # overlap_pick ranks Ritz vectors by |<ref|x>|; past the followed
+            # root that ranking is noise and never converges, so follow one
+            e, X, conv = solve_symmetric(matvec, diag_s, nroots=1, x0=ref,
+                                         pick=overlap_pick(ref),
+                                         tol_residual=tol_residual, label=label)
+            k = 0
+        lam, y = float(e[k]), np.asarray(X[:, k], float)
+    y = y / np.linalg.norm(y)
+    if ref is not None:
+        ov = abs(float(ref @ y))
+        if ov < 0.5:
+            warnings.warn(f'{label}: root crossing, overlap with the previous vector '
+                          f'{ov:.3f} at omega = {omega:.6f} Ha; the picked vector is '
+                          'kept', RuntimeWarning, stacklevel=3)
+    t1 = 1.0 / (1.0 + dmatvec(y))
+    return lam, y, t1, embed
+
+
+def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
+                 t_min=0.3, max_newton=12, max_fixed=30, dense_limit=2000,
+                 verbose=0):
+    """The nroots lowest folded roots, each at its own frequency.
+
+    Seeds: the nroots lowest eigenpairs of the bare singles block M on the
+    channel. Per root: λ, y at ω_k by eigh (n ≤ dense_limit) or Davidson with
+    overlap following; then the Newton step ω_{k+1} = ω_k + (λ - ω_k) T1 while
+    T1 ≥ t_min, else the DIIS-accelerated fixed point ω_{k+1} = λ. Stops at
+    |λ - ω_k| < tol_omega; a root that exhausts max_newton (or max_fixed) steps
+    is returned with converged False and a RuntimeWarning. The roots come back
+    sorted by ω, whatever the order of their seeds.
+
+    Parameters
+    ----------
+    pieces : dict, from ``build_operator(..., pieces=True)`` at adc2 or gf2.
+    nroots : int
+    spin : {'singlet', 'triplet', None}
+    tol_omega, tol_residual : float, Hartree and residual norm.
+    t_min : float, singles weight below which the fixed-point loop takes over.
+    max_newton, max_fixed : int, step budgets per root.
+    dense_limit : int, channel size at or below which A_eff is built and eigh'd.
+    verbose : int, 1 prints one line per outer step.
+
+    Returns
+    -------
+    FoldResult
+    """
+    _check_level(pieces)
+    m0, _, diag_s, embed, _ = folded_operator(pieces, None, spin)
+    n = diag_s.size
+    dense = n <= dense_limit
+    nroots = int(nroots)
+    if n < nroots:
+        warnings.warn(f'the {spin or "combined"} channel holds {n} states, fewer '
+                      f'than nroots={nroots}; returning {n}', RuntimeWarning,
+                      stacklevel=2)
+        nroots = n
+    nfollow = min(nroots + 2, n)
+    label = f'ee-ADC fold ({spin or "both"})'
+    if dense:
+        w0, v0 = np.linalg.eigh(dense_effective(m0, n))
+        seeds = [(float(w0[r]), v0[:, r]) for r in range(nroots)]
+    else:
+        e0, X0, _ = solve_symmetric(m0, diag_s, nroots=nroots,
+                                    tol_residual=tol_residual, label=label + ' seeds')
+        seeds = [(float(e0[r]), np.asarray(X0[:, r], float)) for r in range(nroots)]
+
+    omega = np.empty(nroots)
+    y_out = np.empty((n, nroots))
+    t1_out = np.empty(nroots)
+    steps = np.zeros(nroots, int)
+    loop, converged = [], np.zeros(nroots, bool)
+    for r, (om, y) in enumerate(seeds):
+        mode, hist_o, hist_e = 'newton', [], []
+        k = 0
+        while True:
+            lam, y, t1, _ = _eig_at(pieces, om, spin, y, nfollow, dense,
+                                    tol_residual, label)
+            err = lam - om
+            k += 1
+            if verbose:
+                print(f'{label} root {r} step {k} ({mode}): omega = {om:.8f} '
+                      f'lambda = {lam:.8f} T1 = {t1:.4f}', flush=True)
+            if abs(err) < tol_omega:
+                converged[r] = True
+                break
+            if mode == 'newton' and t1 < t_min:
+                mode, hist_o, hist_e = 'fixed', [], []
+            if mode == 'newton':
+                if k >= max_newton:
+                    break
+                om = om + err * t1                         # Newton on λ(ω) - ω
+            else:
+                hist_o.append(om)
+                hist_e.append(err)
+                hist_o, hist_e = hist_o[-6:], hist_e[-6:]
+                if k >= max_newton + max_fixed:
+                    break
+                om = _diis_step(hist_o, hist_e)
+        if not converged[r]:
+            warnings.warn(f'{label}: root {r} not converged after {k} steps '
+                          f'({mode}), |lambda - omega| = {abs(err):.2e} Ha',
+                          RuntimeWarning, stacklevel=2)
+        omega[r], y_out[:, r], t1_out[r], steps[r] = lam, y, t1, k
+        loop.append(mode)
+    # the fold can reorder the seeds: a lower root of M may land above a higher
+    order = np.argsort(omega, kind='stable')
+    return FoldResult(omega[order], y_out[:, order], t1_out[order], steps[order],
+                      [loop[i] for i in order], converged[order], embed)

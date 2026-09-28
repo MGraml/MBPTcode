@@ -156,6 +156,56 @@ def check_folded_operator(mf, eps, B, no):
     return ok
 
 
+def check_solve_folded(mf, eps, B, no):
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
+    ok = True
+    nv = len(eps) - no
+    n_s = 2 * no * nv
+    ev = HARTREE_TO_EV
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    for spin in ('singlet', 'triplet'):
+        e_full, Z = solve_ee_adc(mf, level='adc2', nroots=3, df=True, spin=spin,
+                                 conv_tol=1e-10)
+        res = ee_fold.solve_folded(P, 3, spin=spin)
+        for r in range(3):
+            d = abs(res.omega[r] - e_full[r]) * ev
+            ok &= check(d < 1e-5, f'{spin} root {r}: folded equals full ADC(2)',
+                        f'{res.omega[r] * ev:.6f} vs {e_full[r] * ev:.6f} eV, '
+                        f'|d| {d:.1e} eV')
+            z = np.asarray(Z[:, r])
+            t1_full = float(z[:n_s] @ z[:n_s]) / float(z @ z)
+            ok &= check(abs(res.t1[r] - t1_full) < 1e-4, f'{spin} root {r}: T1',
+                        f'{res.t1[r]:.5f} vs {t1_full:.5f}')
+            newton = (res.converged[r] and res.steps[r] <= 8
+                      and res.loop[r] == 'newton')
+            ok &= check(newton, f'{spin} root {r}: Newton under eight steps',
+                        f'{res.steps[r]} steps, loop {res.loop[r]}')
+        # the fixed-point loop reaches the same roots
+        res_fp = ee_fold.solve_folded(P, 3, spin=spin, t_min=1.0)
+        d = float(np.max(np.abs(res_fp.omega - e_full[:3]))) * ev
+        ok &= check(d < 1e-5 and all(lp == 'fixed' for lp in res_fp.loop),
+                    f'{spin}: fixed-point loop reaches the same roots',
+                    f'|d| {d:.1e} eV')
+    # short channel: H2/STO-3G has one triplet single
+    mol = gto.M(atom='H 0 0 0; H 0 0 0.74', basis='sto-3g', verbose=0)
+    mf2 = scf.RHF(mol).density_fit()
+    mf2.conv_tol = 1e-12
+    mf2.kernel()
+    eps2 = np.asarray(get_orbital_energies(mf2, representation='spatial'), float)
+    B2 = DFIntegrals.from_scf(mol, mf2).B_aa
+    _, _, _, P2 = ee_r_sigma_df.build_operator(eps2, B2, 1, level='adc2',
+                                               pieces=True)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res2 = ee_fold.solve_folded(P2, 3, spin='triplet')
+    fewer = any('fewer' in str(w.message) for w in caught)
+    ok &= check(res2.omega.size == 1 and fewer,
+                'short channel warns and returns what it has',
+                f'{res2.omega.size} root(s), {len(caught)} warning(s)')
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -169,6 +219,7 @@ def main():
     all_ok &= check_pieces(eps, B, no)
     all_ok &= check_gf2(eps, B, no)
     all_ok &= check_folded_operator(mf, eps, B, no)
+    all_ok &= check_solve_folded(mf, eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
