@@ -18,7 +18,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
      singlets and three triplets, to 1e-5 eV, with T1 against the full eigenvector's
      singles weight to 1e-4, every root under eight Newton steps; t_min=1.0 forces the
      fixed-point loop to the same roots; H2/STO-3G triplets warn on a short channel.
-  5. NH3 / cc-pVDZ: the degenerate singlet pair is followed without a skip.
+  5. CH4 / cc-pVDZ (not NH3: the rounded C3v geometry splits the E pair by 2e-4 eV):
+     the degenerate T2 singlet triple is followed without a skip.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -206,6 +207,44 @@ def check_solve_folded(mf, eps, B, no):
     return ok
 
 
+# exact Td: every coordinate is +-0.6276, so the T2 triple is degenerate to
+# machine precision (the NH3 of the plan, rounded, splits its E pair by 2e-4 eV)
+CH4 = ('C 0 0 0; H 0.6276 0.6276 0.6276; H -0.6276 -0.6276 0.6276; '
+       'H -0.6276 0.6276 -0.6276; H 0.6276 -0.6276 -0.6276')
+
+
+def check_degenerate_set():
+    """CH4 / cc-pVDZ: the degenerate T2 singlet triple is followed without a
+    skip, each partner its own vector."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
+    ok = True
+    ev = HARTREE_TO_EV
+    mol = gto.M(atom=CH4, basis='cc-pvdz', verbose=0)
+    mf = scf.RHF(mol).density_fit()
+    mf.conv_tol = 1e-12
+    mf.kernel()
+    eps = np.asarray(get_orbital_energies(mf, representation='spatial'), float)
+    B = DFIntegrals.from_scf(mol, mf).B_aa
+    no = mol.nelectron // 2
+    e_full, _ = solve_ee_adc(mf, level='adc2', nroots=4, df=True, spin='singlet',
+                             conv_tol=1e-10)
+    e_full = np.asarray(e_full)
+    gaps = np.abs(np.diff(e_full)) * ev
+    ok &= check(gaps[0] < 1e-6 and gaps[1] < 1e-6,
+                'a degenerate singlet triple among the four lowest',
+                f'gaps {gaps[0]:.1e}, {gaps[1]:.1e} eV')
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    res = ee_fold.solve_folded(P, 4, spin='singlet')
+    d = np.abs(res.omega - e_full) * ev
+    ok &= check(float(d.max()) < 1e-5, 'all four folded roots equal the full solve',
+                f'max |d| {d.max():.1e} eV')
+    S = res.y.T @ res.y
+    ov = float(np.max(np.abs(S - np.diag(np.diag(S)))))
+    ok &= check(ov < 1e-6, 'the followed vectors are distinct', f'max overlap {ov:.1e}')
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -220,6 +259,7 @@ def main():
     all_ok &= check_gf2(eps, B, no)
     all_ok &= check_folded_operator(mf, eps, B, no)
     all_ok &= check_solve_folded(mf, eps, B, no)
+    all_ok &= check_degenerate_set()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
