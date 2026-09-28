@@ -111,6 +111,51 @@ def check_gf2(eps, B, no):
     return ok
 
 
+def check_folded_operator(mf, eps, B, no):
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
+    ok = True
+    nv = len(eps) - no
+    n_s = 2 * no * nv
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    # the full solve's lowest singlet: Davidson, since the channel (6365) is far
+    # above DENSE_LIMIT; its residual 1e-10 sits well under every tolerance here
+    e_full, Z = solve_ee_adc(mf, level='adc2', nroots=1, df=True, spin='singlet',
+                             conv_tol=1e-10)
+    w = float(e_full[0])
+    matvec, dmatvec, diag_s, embed, restrict = ee_fold.folded_operator(P, w,
+                                                                       spin='singlet')
+    # singles part of the full eigenvector (solve_ee_adc returns it embedded),
+    # in the channel basis
+    z = np.asarray(Z[:, 0])
+    y = restrict(z[:n_s])
+    y = y / np.linalg.norm(y)
+    res = float(np.linalg.norm(matvec(y) - w * y))
+    ok &= check(res < 1e-8, 'A_eff(w) y = w y on the full root', f'residual {res:.1e}')
+    # dense build equals the matrix-free action
+    n = diag_s.size
+    A = ee_fold.dense_effective(matvec, n)
+    err = float(np.max(np.abs(A @ y - matvec(y))))
+    ok &= check(err < 1e-12, 'dense_effective equals matvec', f'{err:.1e}')
+    ok &= check(np.allclose(A, A.T, atol=1e-10), 'A_eff(w) is symmetric')
+    # omega=None is the bare singles block
+    m0, _, _, _, _ = ee_fold.folded_operator(P, None, spin='singlet')
+    err0 = float(np.linalg.norm(m0(y) - restrict(
+        ee_fold.singles_sb_to_flat(P['be'].ein('iajb,jb->ia', P['M'],
+                                               ee_fold.singles_flat_to_sb(
+                                                   embed(y), no, nv)), no, nv))))
+    ok &= check(err0 < 1e-12, 'omega=None gives M alone', f'{err0:.1e}')
+    # boundary
+    for bad, label in ((np.ones(n + 1), 'wrong length'),
+                       (np.ones(n, dtype=complex), 'complex dtype')):
+        try:
+            matvec(bad)
+            ok &= check(False, f'{label} raises ValueError')
+        except ValueError:
+            ok &= check(True, f'{label} raises ValueError')
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -123,6 +168,7 @@ def main():
     mf, eps, B, no = water_df()
     all_ok &= check_pieces(eps, B, no)
     all_ok &= check_gf2(eps, B, no)
+    all_ok &= check_folded_operator(mf, eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
