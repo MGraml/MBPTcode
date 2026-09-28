@@ -240,7 +240,7 @@ def build_operator(eps, B, nocc_spatial, level='adc3', en_dress=None,
                            (no, nv, no, nv))
 
     be = _eq.SPIN_BLOCKED
-    order = {'adc1': 1, 'adc2': 2, 'adc2x': 2, 'adc3': 3}[level]
+    order = {'adc1': 1, 'adc2': 2, 'adc2x': 2, 'adc3': 3, 'gf2': 1}[level]
     if order == 3 and 'ovvv' not in gb:
         # the third-order ovvv terms still contract anti4's six spin blocks
         gb['ovvv'] = anti4(gb['ovvv_ajbc'].transpose(1, 0, 2, 3))
