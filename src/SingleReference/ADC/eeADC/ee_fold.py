@@ -181,23 +181,21 @@ class FoldResult:
 
 
 def _diis_step(hist_omega, hist_err):
-    """Pulay step on the scalar history: ω_next = sum_k c_k λ_k with the c_k
-    minimising |sum_k c_k e_k| under sum_k c_k = 1, e_k = λ_k - ω_k."""
-    m = len(hist_err)
-    if m == 1:
-        return hist_omega[0] + hist_err[0]
-    e = np.asarray(hist_err)
-    Bm = np.empty((m + 1, m + 1))
-    Bm[:m, :m] = np.outer(e, e)
-    Bm[m, :], Bm[:, m], Bm[m, m] = -1.0, -1.0, 0.0
-    rhs = np.zeros(m + 1)
-    rhs[m] = -1.0
-    try:
-        c = np.linalg.solve(Bm, rhs)[:m]
-    except np.linalg.LinAlgError:
-        return hist_omega[-1] + hist_err[-1]
-    lam = np.asarray(hist_omega) + e
-    return float(c @ lam)
+    """Pulay step on the scalar history: ω_next = sum_k c_k λ_k, λ_k = ω_k + e_k,
+    with the c_k of least norm under sum_k c_k = 1 and sum_k c_k e_k = 0.
+
+    One residual per step makes the Pulay matrix e_k e_l rank one, so from three
+    entries on its bordered system is singular. The least-norm weights are
+    c_k = a + b e_k, which make ω_next the least-squares line λ = α + β e over
+    the history, taken at e = 0: the secant step for two entries, λ for one."""
+    e = np.asarray(hist_err, float)
+    lam = np.asarray(hist_omega, float) + e
+    de = e - e.mean()
+    var = float(de @ de)                   # sum_k (e_k - ē)²
+    if var == 0.0:                         # one entry, or residuals that stay put
+        return float(lam[-1])
+    beta = float(de @ (lam - lam.mean())) / var
+    return float(lam.mean() - beta * e.mean())
 
 
 def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
