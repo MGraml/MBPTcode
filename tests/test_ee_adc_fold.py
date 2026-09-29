@@ -28,6 +28,10 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
      equals the DF route with exact factors.
   8. pieces=True with parity and en_dress at gf2 raise ValueError; an exhausted
      step budget reports converged False with a warning; no input is mutated.
+  9. eq 53 as printed (Monino and Loos 2023: eq 54a plus the six terms of eq 56,
+     transcribed in spin orbitals on the same DF factors) equals the gf2 A_eff
+     element by element at w = None and 0.25 Ha to 1e-10 Ha; with eq 57 added it
+     equals the adc2 A_eff.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -386,6 +390,119 @@ def check_diis_step():
     return ok
 
 
+def _spin_orbital_asym(eps, B, no):
+    """<pq||rs>, shape (nso,)*4, index order (p, q, r, s), and ε, shape (nso,), in
+    spin orbitals ordered occ alpha, occ beta, vir alpha, vir beta, from B[Q, p, q]."""
+    nmo = eps.size
+    nv = nmo - no
+    occ, vir = np.arange(no), np.arange(no, nmo)
+    sp = np.r_[occ, occ, vir, vir]
+    sg = np.r_[np.zeros(no), np.ones(no), np.zeros(nv), np.ones(nv)]
+    eri = np.einsum('Qpq,Qrs->pqrs', B, B)[np.ix_(sp, sp, sp, sp)]      # (pq|rs)
+    same = (sg[:, None] == sg[None, :]).astype(float)
+    # <pq|rs> = (pr|qs) δ(σp σr) δ(σq σs)
+    phys = (eri.transpose(0, 2, 1, 3) * same[:, None, :, None]
+            * same[None, :, None, :])
+    return phys - phys.transpose(0, 1, 3, 2), eps[sp]
+
+
+def _eq53_effective(g, e, No, w, with_eq57):
+    """A^HF (eq 54a) [+ Abar (eq 57)] [+ Xi(w) (eq 56)] of Monino and Loos, shape
+    (No, Nv, No, Nv), index order (i, a, j, b); w None leaves out eq 56."""
+    def ein(sub, *ops):
+        return np.einsum(sub, *ops, optimize=True)
+    o, v = slice(0, No), slice(No, None)
+    eo, ev = e[o], e[v]
+    Nv = ev.size
+    ooov, vovv, oovv, vvoo = g[o, o, o, v], g[v, o, v, v], g[o, o, v, v], g[v, v, o, o]
+    # A_ia,jb = (ε_a - ε_i) δ_ij δ_ab + <ib||aj>
+    A = ein('ibaj->iajb', g[o, v, v, o]).copy()
+    for i in range(No):
+        A[i, :, i, :] += np.diag(ev - eo[i])
+    if with_eq57:
+        # δ_ij ¼ sum_klc <ac||kl><kl||bc> [1/(ε_a - ε_k + ε_c - ε_l) + (a -> b)]
+        r = 1.0 / (ev[:, None, None, None] - eo[None, :, None, None]
+                   + ev[None, None, :, None] - eo[None, None, None, :])     # [a,k,c,l]
+        t = 0.25 * (ein('ackl,klbc,akcl->ab', vvoo, oovv, r)
+                    + ein('ackl,klbc,bkcl->ab', vvoo, oovv, r))
+        for i in range(No):
+            A[i, :, i, :] += t
+        # δ_ab ¼ sum_kcd <cd||ik><jk||cd> [1/(ε_c - ε_i + ε_d - ε_k) + (i -> j)]
+        r = 1.0 / (ev[None, :, None, None] - eo[:, None, None, None]
+                   + ev[None, None, :, None] - eo[None, None, None, :])     # [i,c,d,k]
+        t = 0.25 * (ein('cdik,jkcd,icdk->ij', vvoo, oovv, r)
+                    + ein('cdik,jkcd,jcdk->ij', vvoo, oovv, r))
+        for a in range(Nv):
+            A[:, a, :, a] += t
+        # - ½ sum_kc <ac||ik><jk||bc> [1/(ε_a - ε_i + ε_c - ε_k) + (ia -> jb)]
+        r = 1.0 / (ev[None, :, None, None] - eo[:, None, None, None]
+                   + ev[None, None, None, :] - eo[None, None, :, None])     # [i,a,k,c]
+        A -= 0.5 * (ein('acik,jkbc,iakc->iajb', vvoo, oovv, r)
+                    + ein('acik,jkbc,jbkc->iajb', vvoo, oovv, r))
+    if w is None:
+        return A
+    # δ_ab ½ sum_klc <kl||ic><kl||jc> / (w - (ε_a + ε_c - ε_k - ε_l)), r[a,k,l,c]
+    r = 1.0 / (w - (ev[:, None, None, None] + ev[None, None, None, :]
+                    - eo[None, :, None, None] - eo[None, None, :, None]))
+    t = 0.5 * ein('klic,kljc,aklc->ija', ooov, ooov, r)
+    for a in range(Nv):
+        A[:, a, :, a] += t[:, :, a]
+    # δ_ij ½ sum_kcd <ak||cd><bk||cd> / (w - (ε_c + ε_d - ε_k - ε_i)), r[i,k,c,d]
+    r = 1.0 / (w - (ev[None, None, :, None] + ev[None, None, None, :]
+                    - eo[None, :, None, None] - eo[:, None, None, None]))
+    t = 0.5 * ein('akcd,bkcd,ikcd->iab', vovv, vovv, r)
+    for i in range(No):
+        A[i, :, i, :] += t[i]
+    # - sum_kc <jc||ik><ka||cb> / (w - (ε_b + ε_c - ε_k - ε_i)), r[i,b,k,c];
+    # - sum_kc <jk||ic><ca||kb> / (w - (ε_a + ε_c - ε_k - ε_j)), the same r at [j,a,k,c]
+    r = 1.0 / (w - (ev[None, :, None, None] + ev[None, None, None, :]
+                    - eo[None, None, :, None] - eo[:, None, None, None]))
+    A -= ein('jcik,kacb,ibkc->iajb', g[o, v, o, o], g[o, v, v, v], r)
+    A -= ein('jkic,cakb,jakc->iajb', ooov, g[v, v, o, v], r)
+    # + ½ sum_kl <aj||kl><lk||bi> / (w - (ε_a + ε_b - ε_k - ε_l)), r[a,b,k,l]
+    r = 1.0 / (w - (ev[:, None, None, None] + ev[None, :, None, None]
+                    - eo[None, None, :, None] - eo[None, None, None, :]))
+    A += 0.5 * ein('ajkl,lkbi,abkl->iajb', g[v, o, o, o], g[o, o, v, o], r)
+    # + ½ sum_cd <aj||cd><dc||bi> / (w - (ε_c + ε_d - ε_i - ε_j)), r[i,j,c,d]
+    r = 1.0 / (w - (ev[None, None, :, None] + ev[None, None, None, :]
+                    - eo[:, None, None, None] - eo[None, :, None, None]))
+    A += 0.5 * ein('ajcd,dcbi,ijcd->iajb', vovv, g[v, v, v, o], r)
+    return A
+
+
+def _ms0(A4, no, nv):
+    """(No, Nv, No, Nv) spin-orbital block -> the fold's flat singles layout, shape
+    (2 no nv, 2 no nv): the M_s = 0 singles, aa then bb, (i, a) order."""
+    occ = np.r_[np.repeat(np.arange(no), nv), np.repeat(np.arange(no) + no, nv)]
+    vir = np.r_[np.tile(np.arange(nv), no), np.tile(np.arange(nv) + nv, no)]
+    idx = occ * 2 * nv + vir
+    n = A4.shape[0] * A4.shape[1]
+    return A4.reshape(n, n)[np.ix_(idx, idx)]
+
+
+def check_eq53_transcription(eps, B, no):
+    """Eq 53 of Monino and Loos, JCP 159, 034105 (2023), as printed: eq 54a plus the
+    six terms of eq 56, transcribed in spin orbitals on the same DF factors, against
+    the gf2 A_eff element by element; with eq 57 added, against the adc2 A_eff. The
+    run 2026-09-29_gf2-eq56-transcription found max |d| 3.6e-15 Ha."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    g, e = _spin_orbital_asym(eps, B, no)
+    nv = eps.size - no
+    for level in ('gf2', 'adc2'):
+        _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level=level, pieces=True)
+        for w in (None, 0.25):
+            A = ee_fold.dense_effective(ee_fold.folded_operator(P, w)[0], 2 * no * nv)
+            ref = _ms0(_eq53_effective(g, e, 2 * no, w, level == 'adc2'), no, nv)
+            d = float(np.max(np.abs(A - ref)))
+            terms = ('eq 54a' + (' + eq 57' if level == 'adc2' else '')
+                     + ('' if w is None else ' + eq 56'))
+            tag = 'M' if w is None else f'w = {w} Ha'
+            ok &= check(d < 1e-10, f'{level} {tag}: A_eff equals {terms} transcribed',
+                        f'max |d| {d:.1e} Ha')
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -405,6 +522,7 @@ def main():
     all_ok &= check_gf2_solves(mf, eps, B, no)
     all_ok &= check_boundaries(mf, eps, B, no)
     all_ok &= check_diis_step()
+    all_ok &= check_eq53_transcription(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
