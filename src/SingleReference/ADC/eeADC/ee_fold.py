@@ -2,10 +2,12 @@
 
 At block order o_dd = 0 (levels adc2 and gf2) the doubles block of the EE-ADC
 supermatrix is the bare diagonal D_ijab = ε_a + ε_b - ε_i - ε_j, so the doubles
-can be eliminated without approximation,
+can be eliminated without approximation: the supermatrix eigenproblem
 
-    [ M    Vᵀ ] [ y ]       [ y ]                 Y = (ω - D)⁻¹ V y
-    [ V    D  ] [ Y ]  =  ω [ Y ]      ==>        A_eff(ω) y = ω y,
+    sum_jb M_ia,jb y_jb + sum_K V_K,ia Y_K = ω y_ia ,
+    sum_jb V_K,jb y_jb + D_K Y_K = ω Y_K
+
+gives Y_K = sum_jb V_K,jb y_jb / (ω - D_K) and sum_jb A_eff(ω)_ia,jb y_jb = ω y_ia,
 
     A_eff(ω)_ia,jb = M_ia,jb - sum_K V_K,ia V_K,jb / (D_K - ω) ,
 
@@ -217,6 +219,7 @@ def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
             cl = np.abs(w - w[k]) < _DEGENERATE
             lam, y = float(w[k]), v[:, cl] @ (v[:, cl].T @ ref)
     else:
+        # sum_q A_pq x_q = λ x_p by Davidson on the matvec, A never built
         if ref is None:
             e, X, conv = solve_symmetric(matvec, diag_s, nroots=nfollow,
                                          tol_residual=tol_residual, label=label)
@@ -282,9 +285,11 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     nfollow = min(nroots + 2, n)
     label = f'ee-ADC fold ({spin or "both"})'
     if dense:
+        # sum_q M_pq v_qr = w_r v_pr, M built from n matvecs
         w0, v0 = np.linalg.eigh(dense_effective(m0, n))
         seeds = [(float(w0[r]), v0[:, r]) for r in range(nroots)]
     else:
+        # sum_q M_pq x_qr = e_r x_pr, the nroots lowest by Davidson
         e0, X0, _ = solve_symmetric(m0, diag_s, nroots=nroots,
                                     tol_residual=tol_residual, label=label + ' seeds')
         seeds = [(float(e0[r]), np.asarray(X0[:, r], float)) for r in range(nroots)]
@@ -331,9 +336,10 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     order = np.argsort(omega, kind='stable')
     omega, y_out = omega[order], y_out[:, order]
     # a degenerate level has no preferred basis, and the Davidson follow does not
-    # keep its partners orthogonal: Löwdin, y ← y (yᵀy)^(-1/2), per level. Its
-    # partners agree to tol_omega only; distinct roots sit at different ω, so
-    # their singles parts need not be orthogonal and are left alone
+    # keep its partners orthogonal: Löwdin per level, y_pr ← sum_s y_ps (S^-1/2)_sr
+    # with S_rs = sum_p y_pr y_ps. Its partners agree to tol_omega only; distinct
+    # roots sit at different ω, so their singles parts need not be orthogonal and
+    # are left alone
     start = 0
     for stop in range(1, nroots + 1):
         if stop < nroots and omega[stop] - omega[stop - 1] < tol_omega:
