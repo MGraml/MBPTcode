@@ -74,6 +74,10 @@ def _check_level(pieces):
     if pieces['level'] not in FOLD_LEVELS:
         raise ValueError(f"the fold needs a bare-diagonal doubles block; level="
                          f"{pieces['level']!r} is not one of {FOLD_LEVELS}")
+    if pieces['level'] == 'gw' and pieces.get('dnorm2') is None:
+        # the adc2 flat layout would read none of the (k, c, m) blocks
+        raise ValueError("level='gw' needs pieces['dnorm2'], the norm of its "
+                         "(k, c, m) doubles")
 
 
 def _check_vector(u, n):

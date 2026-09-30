@@ -9,7 +9,8 @@ Checks, water (RHF, DF factors), basis per check:
      [[M, V^T], [V, D]] assembled from the same pieces, to 3e-10 Ha (1e-8 eV), and its
      T1 is that eigenvector's singles weight to 1e-8.
   3. the fold and the builder leave D, W and the input vector untouched; an unknown
-     screening raises ValueError.
+     screening raises ValueError, and so do gw pieces without dnorm2; the Davidson
+     branch equals the dense one (6-31G, TDA, 1e-10 Ha and 1e-8 on T1).
   4. eq 66 transcribed from QuAcK's loops (RGW_phBSE_upfolded_sym.f90 86-216) on
      CasidaSolver's modes, both screenings: M per channel and the full spectrum to
      1e-10 Ha; this pins sqrt(2), 1/2, the signs, the spin, and QPqb's normalisation.
@@ -118,6 +119,23 @@ def check_fold_vs_unfolded(eps, B, no):
     return ok
 
 
+def check_davidson_branch(eps, B, no):
+    """The Davidson branch (dense_limit=0) equals the dense one at level gw: the
+    only branch a production size reaches, which the test size never does."""
+    ok = True
+    P = ee_gw_pieces.build_pieces_gw(eps, B, no, screening='tda')
+    for spin in ('singlet', 'triplet'):
+        kw = dict(spin=spin, tol_omega=1e-10, tol_residual=1e-9)
+        a = ee_fold.solve_folded(P, 3, **kw)
+        b = ee_fold.solve_folded(P, 3, dense_limit=0, **kw)
+        dw = float(np.max(np.abs(a.omega[:3] - b.omega[:3])))
+        dt = float(np.max(np.abs(a.t1[:3] - b.t1[:3])))
+        ok &= check(dw < 1e-10 and dt < 1e-8 and bool(b.converged.all()),
+                    f'tda {spin}: the Davidson branch equals the dense one',
+                    f'max |dw| {dw:.1e} Ha, max |dT1| {dt:.1e}')
+    return ok
+
+
 def check_boundaries(eps, B, no):
     """Inputs untouched; an unknown screening refused."""
     ok = True
@@ -136,6 +154,14 @@ def check_boundaries(eps, B, no):
         ok &= check(False, 'an unknown screening raises ValueError')
     except ValueError:
         ok &= check(True, 'an unknown screening raises ValueError')
+    # the adc2 flat layout reads none of the (k, c, m) blocks: T1 would be 1
+    Q = {k: v for k, v in P.items() if k != 'dnorm2'}
+    try:
+        ee_fold.folded_operator(Q, 0.3, spin='singlet')
+        ok &= check(False, "gw pieces without dnorm2 raise ValueError")
+    except ValueError as exc:
+        ok &= check('dnorm2' in str(exc), "gw pieces without dnorm2 raise ValueError",
+                    str(exc)[:60])
     return ok
 
 
@@ -249,6 +275,7 @@ def main():
     mf, eps, B, no = water('6-31g')
     all_ok &= check_pieces(eps, B, no)
     all_ok &= check_fold_vs_unfolded(eps, B, no)
+    all_ok &= check_davidson_branch(eps, B, no)
     all_ok &= check_eq66_transcription(eps, B, no)
     all_ok &= check_bintrim_berkelbach()
     all_ok &= check_boundaries(eps, B, no)
