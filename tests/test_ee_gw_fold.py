@@ -13,6 +13,8 @@ Checks, water (RHF, DF factors), basis per check:
   4. eq 66 transcribed from QuAcK's loops (RGW_phBSE_upfolded_sym.f90 86-216) on
      CasidaSolver's modes, both screenings: M per channel and the full spectrum to
      1e-10 Ha; this pins sqrt(2), 1/2, the signs, the spin, and QPqb's normalisation.
+  5. with TDA screening and without eq 70, the spectrum equals Bintrim and
+     Berkelbach's H~ (bse_upfolded.build_hamiltonian_familiar), STO-3G, 1e-10 Ha.
 
 Run: python tests/test_ee_gw_fold.py
 """
@@ -219,12 +221,36 @@ def check_eq66_transcription(eps, B, no):
     return ok
 
 
+def check_bintrim_berkelbach():
+    """Eq 66 minus eq 70 with TDA screening is Bintrim and Berkelbach's symmetric H~
+    (eq 12, BSE.bse_upfolded.build_hamiltonian_familiar) with its inner pair rotated
+    onto the modes: the two spectra agree. Water / STO-3G."""
+    from src.SingleReference.BSE import bse_upfolded
+    ok = True
+    _, eps, B, no = water('sto-3g')
+    norb = len(eps)
+    P = ee_gw_pieces.build_pieces_gw(eps, B, no, screening='tda')
+    _, _, _, gf2 = ee_r_sigma_df.build_operator(eps, B, no, level='gf2', pieces=True)
+    H, _ = dense_supermatrix(dict(P, M=gf2['M']))
+    eri = np.einsum('Qpq,Qrs->pqrs', B, B, optimize=True)
+    gb = bse_upfolded.eri_blocks(eri, no, norb)
+    ref = np.sort(np.concatenate([np.linalg.eigvalsh(
+        bse_upfolded.build_hamiltonian_familiar(eps, gb, no, norb - no, spin=s))
+        for s in ('singlet', 'triplet')]))
+    got = np.linalg.eigvalsh(H)
+    d = float(np.max(np.abs(got - ref))) if got.size == ref.size else np.inf
+    ok &= check(d < 1e-10, "tda pieces without eq 70 have H~'s spectrum",
+                f'max |d| {d:.1e} Ha over {ref.size}')
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water('6-31g')
     all_ok &= check_pieces(eps, B, no)
     all_ok &= check_fold_vs_unfolded(eps, B, no)
     all_ok &= check_eq66_transcription(eps, B, no)
+    all_ok &= check_bintrim_berkelbach()
     all_ok &= check_boundaries(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
