@@ -21,7 +21,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
      and the one root equals the full solve.
   5. CH4 / cc-pVDZ (not NH3: the rounded C3v geometry splits the E pair by 2e-4 eV):
      the degenerate T2 singlet triple is followed without a skip, its partners
-     orthonormal, on the dense and on the Davidson branch.
+     orthonormal, on the dense and on the Davidson branch; one level at one omega,
+     equal T1, x1, a cut level returned whole, an exhausted level unconverged.
   6. the Davidson branch equals the dense one on water; spin=None equals the full
      solve over both channels.
   7. gf2: the fold equals the full gf2 channel solve; the dense integral route
@@ -35,6 +36,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
   10. 'gw' is a fold level; pieces['dnorm2'] sets the doubles norm, the adc2 path
       unchanged.
   11. the level and duplicate helpers on constructed values.
+  12. a collapsing distinct pair is reported, the kept root exact; a level split in
+      A_eff warns and each root is a supermatrix eigenvalue.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -268,21 +271,48 @@ def check_degenerate_set():
                 f'gaps {gaps[0]:.1e}, {gaps[1]:.1e} eV')
     _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
     res = ee_fold.solve_folded(P, 4, spin='singlet')
-    d = np.abs(res.omega - e_full) * ev
+    # a level cut by nroots comes back whole, so nout may exceed four
+    d = np.abs(res.omega[:4] - e_full) * ev
     ok &= check(float(d.max()) < 1e-5, 'all four folded roots equal the full solve',
-                f'max |d| {d.max():.1e} eV')
+                f'max |d| {d.max():.1e} eV, nout {res.omega.size}')
     for dense_limit, route in ((2000, 'dense'), (0, 'Davidson')):
-        res = ee_fold.solve_folded(P, 4, spin='singlet', dense_limit=dense_limit)
-        d = np.abs(res.omega - e_full) * ev
+        # the partners' T1 agree to the vectors' accuracy, set by tol_residual
+        res = ee_fold.solve_folded(P, 4, spin='singlet', dense_limit=dense_limit,
+                                   tol_residual=1e-9)
+        d = np.abs(res.omega[:4] - e_full) * ev
         ok &= check(float(d.max()) < 1e-5,
                     f'{route}: all four folded roots equal the full solve',
-                    f'max |d| {d.max():.1e} eV')
+                    f'max |d| {d.max():.1e} eV, nout {res.omega.size}')
         # within the triple; distinct roots sit at different w, so their singles
         # parts need not be orthogonal
         S = res.y[:, :3].T @ res.y[:, :3]
         ov = float(np.max(np.abs(S - np.eye(3))))
         ok &= check(ov < 1e-10, f'{route}: the triple partners are orthonormal',
                     f'max |y^T y - 1| {ov:.1e}')
+        ok &= check(np.ptp(res.omega[:3]) == 0.0
+                    and len(set(res.level[:3].tolist())) == 1
+                    and res.level[3] != res.level[0],
+                    f'{route}: the triple is one level at one omega',
+                    f'levels {res.level.tolist()}')
+        ok &= check(float(np.ptp(res.t1[:3])) < 1e-10,
+                    f'{route}: the partners share T1',
+                    f'spread {np.ptp(res.t1[:3]):.1e}')
+        ok &= check(np.allclose(res.x1, res.y * np.sqrt(res.t1)[None, :],
+                                atol=1e-15, rtol=0), f'{route}: x1 = sqrt(T1) y')
+        cut = ee_fold.solve_folded(P, 2, spin='singlet', dense_limit=dense_limit)
+        dcut = np.abs(cut.omega[:3] - res.omega[:3]) * ev if cut.omega.size >= 3 \
+            else [np.inf]
+        ok &= check(cut.omega.size == 3 and float(np.max(dcut)) < 1e-5,
+                    f'{route}: nroots = 2 returns the whole triple',
+                    f'nout {cut.omega.size}')
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            short = ee_fold.solve_folded(P, 3, spin='singlet', max_newton=1,
+                                         dense_limit=dense_limit)
+        lv = any('level' in str(x.message) and 'not converged' in str(x.message)
+                 for x in caught)
+        ok &= check(lv and not short.converged[:3].any(),
+                    f'{route}: an exhausted level leaves every partner unconverged')
     return ok
 
 
@@ -563,6 +593,104 @@ def check_level_helpers():
     return ok
 
 
+def _synthetic_pieces(m, C, D):
+    """Fold pieces with no = 1, nv = len(m): M = diag(m) on both spin blocks, no
+    cross-spin block; V = C (doubles x singles) per spin block; D the doubles
+    diagonal; level 'gw' with its plain doubles norm. In the singlet channel the
+    supermatrix is [[diag(m), C^T], [C, diag(D)]]."""
+    from src.SingleReference.ADC.eeADC import ee_equations
+    nv = len(m)
+    Ma = np.zeros((1, nv, 1, nv))
+    Ma[0, :, 0, :] = np.diag(m)
+    M = SB({'aaaa': Ma, 'bbbb': Ma.copy(), 'aabb': np.zeros_like(Ma),
+            'bbaa': np.zeros_like(Ma)})
+
+    def V(y1):
+        return SB({s: C @ y1.get(s).ravel() for s in ('aa', 'bb')})
+
+    def Vt(Y):
+        return SB({s: (C.T @ Y.get(s)).reshape(1, nv) for s in ('aa', 'bb')})
+
+    def dnorm2(Y):
+        return float(sum(Y.get(s) @ Y.get(s) for s in ('aa', 'bb')))
+
+    return {'M': M, 'V': V, 'Vt': Vt, 'D': np.asarray(D, float), 'dnorm2': dnorm2,
+            'level': 'gw', 'no': 1, 'nv': nv, 'be': ee_equations.SPIN_BLOCKED}
+
+
+def _synthetic_exact(m, C, D):
+    """Eigenpairs (w, v) of the singlet-channel supermatrix of _synthetic_pieces."""
+    ns, nd = len(m), len(D)
+    H = np.zeros((ns + nd, ns + nd))
+    H[:ns, :ns] = np.diag(m)
+    H[ns:, :ns] = C
+    H[:ns, ns:] = C.T
+    H[ns:, ns:] = np.diag(D)
+    return np.linalg.eigh(H)
+
+
+def check_collapsing_pair():
+    """A distinct pair 7.05e-7 Ha apart whose seeds lie 0.22 Ha apart in M (the probe
+    developments/ee_gw_fold/probe_lowdin_pair_2026-09-30): both seeds converge onto
+    the lower root. The fold reports the duplicate and keeps one exact root."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    D = np.array([1.0, 1.4])
+    C = np.array([[0.3, 0.3, 0.0], [0.3, -0.54, 0.0]])
+    s = np.sum(C ** 2 / (D[:, None] - 0.5), axis=0)
+    m = np.array([0.5 + s[0], 0.5 + s[1] + 1.2e-6, 1.5])
+    w, v = _synthetic_exact(m, C, D)
+    pair = np.sort(w[np.abs(w - 0.5) < 1e-3])
+    ok &= check(pair.size == 2 and 5e-7 < pair[1] - pair[0] < 1e-6,
+                'the synthetic pair is distinct and closer than 1e-6 Ha',
+                f'split {pair[1] - pair[0]:.2e} Ha')
+    P = _synthetic_pieces(m, C, D)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res = ee_fold.solve_folded(P, 2, spin='singlet', tol_omega=1e-12)
+    dup = any('landed on one root' in str(x.message) for x in caught)
+    ok &= check(dup and int(np.sum(~res.converged)) == 1,
+                'the collapse is reported: a warning, one root unconverged',
+                f'converged {res.converged.tolist()}')
+    k = int(np.flatnonzero(res.converged)[0]) if res.converged.any() else 0
+    u = v[:3, int(np.argmin(np.abs(w - res.omega[k])))]
+    err = 1.0 - abs(float(u @ res.y[:, k])) / np.linalg.norm(u)
+    ok &= check(abs(res.omega[k] - pair[0]) < 1e-10 and err < 1e-8,
+                'the kept root is the exact lower root, vector included',
+                f'|dw| {abs(res.omega[k] - pair[0]):.1e} Ha, 1-|y.u| {err:.1e}')
+    return ok
+
+
+def check_split_level():
+    """A pair degenerate in M that V splits by 7.8e-6 Ha in A_eff, along
+    directions fixed in omega at 45 degrees to M's seeds: one level at the start;
+    the fold warns, re-solves per root, and both roots are supermatrix eigenvalues."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    ca, cb, r2 = 0.2, np.sqrt(0.04 - 5e-6), 1.0 / np.sqrt(2.0)
+    C = np.array([[ca * r2, ca * r2, 0.0], [cb * r2, -cb * r2, 0.0]])
+    D = np.array([1.0, 1.0])
+    m = np.array([0.5, 0.5, 1.5])
+    w, _ = _synthetic_exact(m, C, D)
+    pair = np.sort(w[(w > 0.3) & (w < 0.5)])
+    P = _synthetic_pieces(m, C, D)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res = ee_fold.solve_folded(P, 2, spin='singlet', tol_omega=1e-12)
+    split = any('not degenerate' in str(x.message) for x in caught)
+    ok &= check(split and pair.size == 2,
+                'a level split in A_eff warns and is re-solved per root',
+                f'split {pair[1] - pair[0]:.1e} Ha')
+    d = np.abs(np.sort(res.omega)[:2] - pair) if res.omega.size >= 2 else [np.inf]
+    ok &= check(float(np.max(d)) < 1e-10 and bool(res.converged.all()),
+                'both roots are the supermatrix eigenvalues',
+                f'max |dw| {np.max(d):.1e} Ha')
+    lv = res.level[:2].tolist()
+    ok &= check(len(lv) == 2 and lv[0] != lv[1],
+                'the split roots are levels of their own', f'level {lv}')
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -584,6 +712,8 @@ def main():
     all_ok &= check_boundaries(mf, eps, B, no)
     all_ok &= check_diis_step()
     all_ok &= check_level_helpers()
+    all_ok &= check_collapsing_pair()
+    all_ok &= check_split_level()
     all_ok &= check_eq53_transcription(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1

@@ -158,6 +158,7 @@ def folded_operator(pieces, omega, spin=None):
         y1 = singles_flat_to_sb(embed(u), no, nv)
         Yt = be.divide(V(y1), denom)
         if dnorm2 is not None:
+            # sum_K Y_K² in the pieces' own doubles layout
             return float(dnorm2(Yt))
         # Y_K = sum_jb V_K,jb y_jb / (D_K - ω), flat; then sum_K Y_K²
         Yf = doubles_sb_to_flat(Yt, no, nv)
@@ -218,8 +219,8 @@ def _diis_step(hist_omega, hist_err):
 
 
 def _levels(e, tol=_DEGENERATE):
-    """(start, stop) runs of ascending values e whose spread, max minus min, is at
-    most tol: the degenerate levels, a lone value being a level of one."""
+    """(start, stop) runs of ascending values e, shape (m,), whose spread, max minus
+    min, is at most tol: the degenerate levels, a lone value being a level of one."""
     runs, start = [], 0
     for k in range(1, len(e) + 1):
         if k == len(e) or e[k] - e[start] > tol:
@@ -235,6 +236,7 @@ def _doubles_dot(pieces, Ya, Yb):
         # polarisation: <a, b> = (|a + b|² - |a - b|²) / 4
         return 0.25 * (float(dnorm2(Ya + Yb)) - float(dnorm2(Ya - Yb)))
     no, nv = pieces['no'], pieces['nv']
+    # sum_K Ya_K Yb_K on the flat adc2 layout
     return float(doubles_sb_to_flat(Ya, no, nv) @ doubles_sb_to_flat(Yb, no, nv))
 
 
@@ -253,7 +255,9 @@ def _duplicates(omega, y, t1, Yt, dot, tol_omega):
         |x_r · x_s| = sqrt(T1_r T1_s) |y_r · y_s + Ỹ_r · Ỹ_s|
 
     above _DUPLICATE; it vanishes for distinct roots at any T1, where the singles
-    overlap alone need not. Yt: the roots' Ỹ; dot: the doubles inner product."""
+    overlap alone need not. omega, t1: shape (nout,); y: shape (n, nout), unit
+    singles in the channel basis; Yt: the roots' Ỹ (_doubles_image), nout entries;
+    dot: the doubles inner product (_doubles_dot)."""
     out = []
     for s in range(len(omega)):
         for r in range(s):
@@ -309,28 +313,166 @@ def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
     return lam, y, t1, embed
 
 
+def _subspace_pick(Y):
+    """A davidson1 `pick` keeping the nroots Ritz vectors of largest projection
+    |Y^T x|² onto span(Y), Y (n, g) orthonormal, sorted ascending; the score is the
+    same for any basis of span(Y), unlike overlap_pick's with one vector."""
+    Y = np.asarray(Y, float)
+
+    def pick(w, v, nroots, envs):
+        xs = envs['xs']
+        # R_ck = sum_p Y_pc (xs_k)_p, the trial vectors on span(Y)
+        R = np.array([[float(Y[:, c] @ x) for x in xs] for c in range(Y.shape[1])])
+        # score_m = sum_c (sum_k R_ck v_km)², Ritz vector m projected on span(Y)
+        score = np.sum((R @ v) ** 2, axis=0)
+        idx = np.argsort(-score)[:nroots]
+        order = idx[np.argsort(w[idx])]
+        return w[order], v[:, order], order
+
+    return pick
+
+
+def _eig_level(pieces, omega, spin, Y, dense, tol_residual, label):
+    """The g eigenpairs of A_eff(ω) of largest projection onto span(Y), Y (n, g)
+    orthonormal. Returns λ (g,), Z (n, g) the eigenvectors, ZR (n, g) = Z rotated
+    onto Y by the orthogonal Procrustes R, and T1 (g,) of the columns of ZR."""
+    matvec, dmatvec, diag_s, _, _ = folded_operator(pieces, omega, spin)
+    n, g = Y.shape
+    if dense:
+        # sum_q A_pq v_qm = w_m v_pm, A built from n matvecs
+        w, v = np.linalg.eigh(dense_effective(matvec, n))
+        score = np.sum((Y.T @ v) ** 2, axis=0)    # sum_c (sum_p Y_pc v_pm)²
+        k = np.sort(np.argsort(-score)[:g])
+        lam, Z = w[k], v[:, k]
+    else:
+        # sum_q A_pq x_qm = λ_m x_pm for the g Ritz vectors of largest projection
+        lam, Z, _ = solve_symmetric(matvec, diag_s, nroots=g, x0=Y,
+                                    pick=_subspace_pick(Y),
+                                    tol_residual=tol_residual, label=label)
+        lam, Z = np.asarray(lam, float), np.asarray(Z, float)
+    # sum_p Z_pk Y_pc = sum_j U_kj s_j Wt_jc; the orthogonal R_kc = sum_j U_kj Wt_jc
+    # minimises sum_pc (sum_k Z_pk R_kc - Y_pc)², and ZR_pc = sum_k Z_pk R_kc
+    U, _, Wt = np.linalg.svd(Z.T @ Y)
+    ZR = Z @ (U @ Wt)
+    t1 = np.array([1.0 / (1.0 + dmatvec(ZR[:, j])) for j in range(g)])
+    return lam, Z, ZR, t1
+
+
+def _iterate(step, om, tol_omega, t_min, max_newton, max_fixed, label, verbose):
+    """λ(ω) = ω for one root or one level: step(ω) -> (λ, T1, state); Newton
+    ω + (λ - ω) T1 while T1 >= t_min, else the DIIS fixed point. Returns
+    (λ, T1, state, steps, loop, converged, |λ - ω|) of the last step."""
+    mode, hist_o, hist_e, k = 'newton', [], [], 0
+    while True:
+        lam, t1, state = step(om)
+        err = lam - om
+        k += 1
+        if verbose:
+            print(f'{label} step {k} ({mode}): omega = {om:.8f} '
+                  f'lambda = {lam:.8f} T1 = {t1:.4f}', flush=True)
+        if abs(err) < tol_omega:
+            return lam, t1, state, k, mode, True, abs(err)
+        if mode == 'newton' and t1 < t_min:
+            mode, hist_o, hist_e = 'fixed', [], []
+        if mode == 'newton':
+            if k >= max_newton:
+                return lam, t1, state, k, mode, False, abs(err)
+            om = om + err * t1                         # Newton on λ(ω) - ω
+        else:
+            hist_o.append(om)
+            hist_e.append(err)
+            hist_o, hist_e = hist_o[-6:], hist_e[-6:]
+            if k >= max_newton + max_fixed:
+                return lam, t1, state, k, mode, False, abs(err)
+            om = _diis_step(hist_o, hist_e)
+
+
+def _root_step(pieces, spin, y, nfollow, dense, tol_residual, label):
+    """step(ω) for one root, following the previous vector."""
+    ref = [y]
+
+    def step(om):
+        lam, yk, t1, _ = _eig_at(pieces, om, spin, ref[0], nfollow, dense,
+                                 tol_residual, label)
+        ref[0] = yk
+        return lam, t1, yk
+
+    return step
+
+
+def _level_step(pieces, spin, Y, dense, tol_residual, label):
+    """step(ω) for a level: the mean eigenvalue and the mean T1 of its partners."""
+    ref = [Y]
+
+    def step(om):
+        lam, Z, ZR, t1 = _eig_level(pieces, om, spin, ref[0], dense, tol_residual,
+                                    label)
+        ref[0] = ZR
+        return float(lam.mean()), float(t1.mean()), (lam, Z, ZR, t1)
+
+    return step
+
+
+def _seed_levels(m0, diag_s, n, nroots, dense, tol_residual, label):
+    """Seeds of M, lowest first, e (ns,) and X (n, ns), and the levels among them
+    that start below nroots; on the Davidson branch the seeds are solved to
+    _SEED_RESIDUAL and extended until the last such level ends before the last seed,
+    so a level cut by nroots comes back whole."""
+    if dense:
+        # sum_q M_pq v_qr = w_r v_pr, M built from n matvecs
+        e, X = np.linalg.eigh(dense_effective(m0, n))
+        return e, X, [(a, b) for a, b in _levels(e) if a < nroots]
+    extra = 2
+    while True:
+        ns = min(nroots + extra, n)
+        # sum_q M_pq x_qr = e_r x_pr, the ns lowest by Davidson
+        e, X, _ = solve_symmetric(m0, diag_s, nroots=ns,
+                                  tol_residual=min(tol_residual, _SEED_RESIDUAL),
+                                  label=label + ' seeds')
+        e, X = np.asarray(e, float), np.asarray(X, float)
+        runs = [(a, b) for a, b in _levels(e) if a < nroots]
+        if runs[-1][1] < ns or ns == n:
+            return e, X, runs
+        extra *= 2
+
+
 def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
                  t_min=0.3, max_newton=12, max_fixed=30, dense_limit=2000,
                  verbose=0):
-    """The nroots lowest folded roots, each at its own frequency.
+    """The nroots lowest folded roots, each level at its own frequency.
 
-    Seeds: the nroots lowest eigenpairs of the bare singles block M on the
-    channel. Per root: λ, y at ω_k by eigh (n ≤ dense_limit) or Davidson with
-    overlap following; then the Newton step ω_{k+1} = ω_k + (λ - ω_k) T1 while
-    T1 ≥ t_min, else the DIIS-accelerated fixed point ω_{k+1} = λ. Stops at
-    |λ - ω_k| < tol_omega; a root that exhausts max_newton (or max_fixed) steps
-    is returned with converged False and a RuntimeWarning. The roots come back
-    sorted by ω, whatever the order of their seeds, and the partners of a
-    degenerate level (ω closer than tol_omega) mutually orthonormal.
+    Seeds: the lowest eigenpairs of the bare singles block M on the channel (eigh
+    for n ≤ dense_limit, else Davidson to residual 1e-9), grouped into levels whose
+    eigenvalues spread by at most 1e-8 Ha. A level of one is solved per root: λ, y
+    at ω_k by eigh or Davidson with overlap following, then the Newton step
+    ω_{k+1} = ω_k + (λ - ω_k) T1 while T1 ≥ t_min, else the DIIS-accelerated fixed
+    point ω_{k+1} = λ. A level of g > 1 is solved jointly: one ω, the g eigenpairs
+    of A_eff(ω) of largest projection onto the span of its partners, rotated onto
+    them (orthogonal Procrustes), Newton on the mean eigenvalue with the mean T1;
+    the partners come back at one ω, orthonormal, with one level index. A level
+    whose g eigenvalues spread by more than 1e-8 Ha at convergence is re-solved per
+    root, with a RuntimeWarning. Stops at |λ - ω| < tol_omega; a root or a level
+    that exhausts max_newton (then max_fixed) steps comes back converged False with
+    a RuntimeWarning. A level cut by nroots comes back whole: up to g - 1 roots
+    more than asked. Two roots that land on one root (|Δω| < 2 tol_omega,
+    full-vector overlap above 0.5) warn, and the later is marked converged False;
+    the root it missed is not recovered.
+
+    Limits: the vectors of two distinct roots split by δ are determined to about
+    tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
+    either, so a pair closer than the ω accuracy has ill-determined vectors; a
+    near-degeneracy the fold creates, absent from M, can collapse two seeds onto one
+    root, which the duplicate check reports.
 
     Parameters
     ----------
-    pieces : dict, from ``build_operator(..., pieces=True)`` at adc2 or gf2.
+    pieces : dict, from ``build_operator(..., pieces=True)`` at adc2 or gf2, or
+        ``ee_gw_pieces.build_pieces_gw`` (level gw).
     nroots : int
     spin : {'singlet', 'triplet', None}
     tol_omega, tol_residual : float, Hartree and residual norm.
     t_min : float, singles weight below which the fixed-point loop takes over.
-    max_newton, max_fixed : int, step budgets per root.
+    max_newton, max_fixed : int, step budgets per root or level.
     dense_limit : int, channel size at or below which A_eff is built and eigh'd.
     verbose : int, 1 prints one line per outer step.
 
@@ -350,71 +492,67 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         nroots = n
     nfollow = min(nroots + 2, n)
     label = f'ee-ADC fold ({spin or "both"})'
-    if dense:
-        # sum_q M_pq v_qr = w_r v_pr, M built from n matvecs
-        w0, v0 = np.linalg.eigh(dense_effective(m0, n))
-        seeds = [(float(w0[r]), v0[:, r]) for r in range(nroots)]
-    else:
-        # sum_q M_pq x_qr = e_r x_pr, the nroots lowest by Davidson
-        e0, X0, _ = solve_symmetric(m0, diag_s, nroots=nroots,
-                                    tol_residual=tol_residual, label=label + ' seeds')
-        seeds = [(float(e0[r]), np.asarray(X0[:, r], float)) for r in range(nroots)]
+    e0, X0, runs = _seed_levels(m0, diag_s, n, nroots, dense, tol_residual, label)
+    nout = runs[-1][1]
+    omega, t1_out = np.empty(nout), np.empty(nout)
+    y_out = np.empty((n, nout))
+    level, steps = np.empty(nout, int), np.zeros(nout, int)
+    loop, converged = [''] * nout, np.zeros(nout, bool)
+    kw = dict(tol_omega=tol_omega, t_min=t_min, max_newton=max_newton,
+              max_fixed=max_fixed, verbose=verbose)
 
-    omega = np.empty(nroots)
-    y_out = np.empty((n, nroots))
-    t1_out = np.empty(nroots)
-    steps = np.zeros(nroots, int)
-    loop, converged = [], np.zeros(nroots, bool)
-    for r, (om, y) in enumerate(seeds):
-        mode, hist_o, hist_e = 'newton', [], []
-        k = 0
-        while True:
-            lam, y, t1, _ = _eig_at(pieces, om, spin, y, nfollow, dense,
-                                    tol_residual, label)
-            err = lam - om
-            k += 1
-            if verbose:
-                print(f'{label} root {r} step {k} ({mode}): omega = {om:.8f} '
-                      f'lambda = {lam:.8f} T1 = {t1:.4f}', flush=True)
-            if abs(err) < tol_omega:
-                converged[r] = True
-                break
-            if mode == 'newton' and t1 < t_min:
-                mode, hist_o, hist_e = 'fixed', [], []
-            if mode == 'newton':
-                if k >= max_newton:
-                    break
-                om = om + err * t1                         # Newton on λ(ω) - ω
-            else:
-                hist_o.append(om)
-                hist_e.append(err)
-                hist_o, hist_e = hist_o[-6:], hist_e[-6:]
-                if k >= max_newton + max_fixed:
-                    break
-                om = _diis_step(hist_o, hist_e)
-        if not converged[r]:
+    def solve_root(r, om, y):
+        step = _root_step(pieces, spin, y, nfollow, dense, tol_residual, label)
+        lam, t1, yk, k, mode, conv, err = _iterate(step, om,
+                                                   label=f'{label} root {r}', **kw)
+        if not conv:
             warnings.warn(f'{label}: root {r} not converged after {k} steps '
-                          f'({mode}), |lambda - omega| = {abs(err):.2e} Ha',
+                          f'({mode}), |lambda - omega| = {err:.2e} Ha',
+                          RuntimeWarning, stacklevel=3)
+        omega[r], y_out[:, r], t1_out[r], steps[r] = lam, yk, t1, k
+        loop[r], converged[r] = mode, conv
+
+    nlev = 0
+    for lv, (a, b) in enumerate(runs):
+        level[a:b] = nlev
+        nlev += 1
+        if b - a == 1:
+            # λ(ω) = ω on the root's own followed vector
+            solve_root(a, float(e0[a]), X0[:, a])
+            continue
+        # λ̄(ω) = ω, λ̄ the mean of the b - a eigenvalues of largest projection
+        # onto the span of the level's seeds X0[:, a:b]
+        step = _level_step(pieces, spin, X0[:, a:b], dense, tol_residual, label)
+        lbar, _, (lam, Z, ZR, t1), k, mode, conv, err = _iterate(
+            step, float(e0[a:b].mean()), label=f'{label} level {lv}', **kw)
+        if conv and lam.max() - lam.min() > _DEGENERATE:
+            warnings.warn(f'{label}: level {lv} split by '
+                          f'{lam.max() - lam.min():.1e} Ha in A_eff, not degenerate; '
+                          're-solved per root', RuntimeWarning, stacklevel=2)
+            level[a:b] = nlev - 1 + np.arange(b - a)    # no partners: one level each
+            nlev += b - a - 1
+            # λ_j(ω) = ω per root, each from the level's final eigenvector Z_pj
+            for j, r in enumerate(range(a, b)):
+                solve_root(r, float(lam[j]), Z[:, j])
+            continue
+        if not conv:
+            warnings.warn(f'{label}: level {lv} not converged after {k} steps '
+                          f'({mode}), |lambda - omega| = {err:.2e} Ha',
                           RuntimeWarning, stacklevel=2)
-        omega[r], y_out[:, r], t1_out[r], steps[r] = lam, y, t1, k
-        loop.append(mode)
+        omega[a:b], y_out[:, a:b], t1_out[a:b] = lbar, ZR, t1
+        steps[a:b], converged[a:b] = k, conv
+        loop[a:b] = [mode] * (b - a)
+    Yt = [_doubles_image(pieces, y_out[:, r], omega[r], embed) for r in range(nout)]
+    for r, s in _duplicates(omega, y_out, t1_out, Yt,
+                            lambda Ya, Yb: _doubles_dot(pieces, Ya, Yb), tol_omega):
+        if converged[s]:
+            warnings.warn(f'{label}: roots {r} and {s} landed on one root at omega '
+                          f'= {omega[r]:.8f} Ha; root {s} marked unconverged, the '
+                          'root it missed is not recovered', RuntimeWarning,
+                          stacklevel=2)
+        converged[s] = False
     # the fold can reorder the seeds: a lower root of M may land above a higher
     order = np.argsort(omega, kind='stable')
-    omega, y_out = omega[order], y_out[:, order]
-    # a degenerate level has no preferred basis, and the Davidson follow does not
-    # keep its partners orthogonal: Löwdin per level, y_pr ← sum_s y_ps (S^-1/2)_sr
-    # with S_rs = sum_p y_pr y_ps. Its partners agree to tol_omega only; distinct
-    # roots sit at different ω, so their singles parts need not be orthogonal and
-    # are left alone
-    start = 0
-    for stop in range(1, nroots + 1):
-        if stop < nroots and omega[stop] - omega[stop - 1] < tol_omega:
-            continue
-        if stop - start > 1:
-            blk = y_out[:, start:stop]
-            s, U = np.linalg.eigh(blk.T @ blk)
-            y_out[:, start:stop] = blk @ (U / np.sqrt(s)) @ U.T
-        start = stop
-    return FoldResult(omega, y_out, t1_out[order], steps[order],
+    return FoldResult(omega[order], y_out[:, order], t1_out[order], steps[order],
                       [loop[i] for i in order], converged[order], embed,
-                      np.arange(nroots))
+                      level[order])
