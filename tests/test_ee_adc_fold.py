@@ -401,7 +401,35 @@ def check_boundaries(mf, eps, B, no):
     same = (np.array_equal(u, u0) and np.array_equal(P['D'], D0)
             and np.array_equal(P['M'].get('aaaa'), M0))
     ok &= check(same, 'matvec and solve_folded leave their inputs untouched')
+    empty = ee_fold.solve_folded(P, 0, spin='singlet')
+    ok &= check(empty.omega.size == 0 and empty.y.shape == (diag_s.size, 0),
+                'nroots = 0 returns an empty result', f'y {empty.y.shape}')
+    try:
+        ee_fold.solve_folded(P, -1, spin='singlet')
+        ok &= check(False, 'nroots < 0 raises ValueError')
+    except ValueError as exc:
+        ok &= check('nroots' in str(exc), 'nroots < 0 raises ValueError', str(exc)[:60])
     return ok
+
+
+def check_level_crossing():
+    """The level path warns when its partners leave their previous span: the
+    smallest singular value of sum_p Z_pk Y_pc below 0.5, silent when aligned."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    m = np.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+    P = _synthetic_pieces(m, np.zeros((1, 6)), np.array([2.0]))
+    spread = np.zeros((6, 2))
+    spread[0, 0] = 1.0
+    spread[1:, 1] = 1.0 / np.sqrt(5.0)               # |overlap| 0.45 with each state
+    got = {}
+    for name, Y in (('spread', spread), ('aligned', np.eye(6)[:, :2])):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            ee_fold._eig_level(P, 0.3, 'singlet', Y, True, 1e-9, 'test')
+        got[name] = any('crossing' in str(x.message) for x in caught)
+    return check(got['spread'] and not got['aligned'],
+                 'a level leaving its span warns; an aligned level does not',
+                 str(got))
 
 
 def check_diis_step():
@@ -738,6 +766,7 @@ def main():
     all_ok &= check_collapsing_pair()
     all_ok &= check_split_level()
     all_ok &= check_duplicate_images(eps, B, no)
+    all_ok &= check_level_crossing()
     all_ok &= check_eq53_transcription(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1

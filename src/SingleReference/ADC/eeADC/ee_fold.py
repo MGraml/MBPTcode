@@ -12,7 +12,11 @@ gives Y_K = sum_jb V_K,jb y_jb / (ω - D_K) and sum_jb A_eff(ω)_ia,jb y_jb = ω
     A_eff(ω)_ia,jb = M_ia,jb - sum_K V_K,ia V_K,jb / (D_K - ω) ,
 
 with ia, jb the singles and K the doubles of the flat adc2 layout, in whose
-metric the supermatrix is symmetric (K is a spin-resolved (k, l, c, d)).
+metric the supermatrix is symmetric (K is a spin-resolved (k, l, c, d)). Level
+gw (ee_gw_pieces, eq 66: BSE@GW with one doubles set) has the same shape with
+K = (k, c, m) per spin block, a particle-hole pair times a screening mode,
+D_kcm = Ω_m + ε_c - ε_k, and the plain sum over its blocks as the doubles norm
+(pieces['dnorm2']).
 For the eigenpair (λ(ω), y) of A_eff(ω) with sum_ia y_ia² = 1,
 
     dλ/dω = -sum_K (sum_jb V_K,jb y_jb)² / (D_K - ω)²,
@@ -33,7 +37,8 @@ of ee_driver._channel_basis at the singles layout (level 'adc1').
 
 References
 ----------
-E. Monino and P.-F. Loos, J. Chem. Phys. 159, 034105 (2023), eq 53 (gf2).
+E. Monino and P.-F. Loos, J. Chem. Phys. 159, 034105 (2023), eq 53 (gf2), eq 66
+(gw).
 C. Hättig and F. Weigend, J. Chem. Phys. (2000), doi:10.1063/1.1290013 (the
 folded-doubles solver of RI-CC2).
 """
@@ -98,7 +103,8 @@ def folded_operator(pieces, omega, spin=None):
     pieces : dict
         From ``build_operator(..., pieces=True)``: 'M' (SB, blocks of shape
         (no, nv, no, nv), index order (i, a, j, b)), 'V' (SB singles, blocks
-        (no, nv), (i, a) -> SB doubles, blocks (no, no, nv, nv), (i, j, a, b)),
+        (no, nv), (i, a) -> SB doubles, blocks (no, no, nv, nv), (i, j, a, b), or,
+        at level gw, blocks 'aa' and 'bb' of shape (no, nv, nm), (k, c, m)),
         'Vt' (the reverse map), 'D' (ndarray, shape (no, no, nv, nv), index
         order (i, j, a, b), or, at level gw, shape (no, nv, nm), index order
         (k, c, m)), 'level', 'no', 'nv', 'be'; 'dnorm2' (optional: SB doubles
@@ -357,7 +363,13 @@ def _eig_level(pieces, omega, spin, Y, dense, tol_residual, label):
         lam, Z = np.asarray(lam, float), np.asarray(Z, float)
     # sum_p Z_pk Y_pc = sum_j U_kj s_j Wt_jc; the orthogonal R_kc = sum_j U_kj Wt_jc
     # minimises sum_pc (sum_k Z_pk R_kc - Y_pc)², and ZR_pc = sum_k Z_pk R_kc
-    U, _, Wt = np.linalg.svd(Z.T @ Y)
+    U, s, Wt = np.linalg.svd(Z.T @ Y)
+    if s.min() < 0.5:
+        # the per-root path's crossing test, for a subspace: the worst-kept
+        # direction of span(Y) overlaps the new span by s_min
+        warnings.warn(f'{label}: level crossing, smallest overlap of the level with '
+                      f'its previous span {s.min():.3f} at omega = {omega:.6f} Ha; '
+                      'the picked vectors are kept', RuntimeWarning, stacklevel=3)
     ZR = Z @ (U @ Wt)
     t1 = np.array([1.0 / (1.0 + dmatvec(ZR[:, j])) for j in range(g)])
     return lam, Z, ZR, t1
@@ -454,14 +466,17 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     point ω_{k+1} = λ. A level of g > 1 is solved jointly: one ω, the g eigenpairs
     of A_eff(ω) of largest projection onto the span of its partners, rotated onto
     them (orthogonal Procrustes), Newton on the mean eigenvalue with the mean T1;
-    the partners come back at one ω, orthonormal, with one level index. A level
-    whose g eigenvalues spread by more than 1e-8 Ha at convergence is re-solved per
-    root, with a RuntimeWarning. Stops at |λ - ω| < tol_omega; a root or a level
-    that exhausts max_newton (then max_fixed) steps comes back converged False with
-    a RuntimeWarning. A level cut by nroots comes back whole: up to g - 1 roots
-    more than asked. Two roots that land on one root (|Δω| < 2 tol_omega,
-    full-vector overlap above 0.5) warn, and the later is marked converged False;
-    the root it missed is not recovered.
+    the partners come back at one ω, orthonormal, with one level index, their T1
+    equal to the vectors' accuracy (on the Davidson branch set by tol_residual:
+    3.6e-9 at 1e-6 on CH4's T2 triple). A level whose partners leave their previous
+    span (overlap below 0.5) warns, as a root crossing does. A level whose g
+    eigenvalues spread by more than 1e-8 Ha at convergence is re-solved per root,
+    with a RuntimeWarning. nroots = 0 returns an empty result. Stops at
+    |λ - ω| < tol_omega; a root or a level that exhausts max_newton (then
+    max_fixed) steps comes back converged False with a RuntimeWarning. A level cut
+    by nroots comes back whole: up to g - 1 roots more than asked. Two roots that
+    land on one root (|Δω| < 2 tol_omega, full-vector overlap above 0.5) warn, and
+    the later is marked converged False; the root it missed is not recovered.
 
     Limits: the vectors of two distinct roots split by δ are determined to about
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
@@ -490,6 +505,12 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     n = diag_s.size
     dense = n <= dense_limit
     nroots = int(nroots)
+    if nroots < 0:
+        raise ValueError(f'nroots={nroots}; expected a count >= 0')
+    if nroots == 0:
+        return FoldResult(np.empty(0), np.empty((n, 0)), np.empty(0),
+                          np.zeros(0, int), [], np.zeros(0, bool), embed,
+                          np.empty(0, int))
     if n < nroots:
         warnings.warn(f'the {spin or "combined"} channel holds {n} states, fewer '
                       f'than nroots={nroots}; returning {n}', RuntimeWarning,

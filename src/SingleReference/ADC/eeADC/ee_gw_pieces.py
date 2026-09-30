@@ -128,13 +128,16 @@ def build_pieces_gw(eps, B, nocc, screening='tda'):
         blocks; 'level' 'gw'; 'no', 'nv', 'be'; 'omega' (nm,) and 'W'
         (norb, norb, nm) for inspection.
     """
+    if screening not in ('tda', 'rpa'):
+        raise ValueError(f"screening={screening!r}; expected 'tda' or 'rpa'")
     eps = np.asarray(eps, float)
     no = nocc
     nv = len(eps) - no
-    _, _, _, gf2 = ee_r_sigma_df.build_operator(eps, B, no, level='gf2', pieces=True)
+    # A^HF alone: the gf2 builder's other pieces hold its doubles blocks
+    M_hf = ee_r_sigma_df.build_operator(eps, B, no, level='gf2', pieces=True)[3]['M']
     omega, W = gw_modes(eps, B, no, screening)
     Abar = static_term(eps, W, omega, no)
-    M = gf2['M'] + SB({'aaaa': Abar, 'bbbb': Abar})
+    M = M_hf + SB({'aaaa': Abar, 'bbbb': Abar})
     Woo, Wvv = W[:no, :no, :], W[no:, no:, :]              # W^m_ik, W^m_ac
     eo, ev = eps[:no], eps[no:]
     # D_kcm = Ω_m + ε_c - ε_k

@@ -152,8 +152,9 @@ def check_boundaries(eps, B, no):
     try:
         ee_gw_pieces.build_pieces_gw(eps, B, no, screening='bogus')
         ok &= check(False, 'an unknown screening raises ValueError')
-    except ValueError:
-        ok &= check(True, 'an unknown screening raises ValueError')
+    except ValueError as exc:
+        ok &= check('screening' in str(exc), 'an unknown screening raises ValueError',
+                    str(exc)[:60])
     # the adc2 flat layout reads none of the (k, c, m) blocks: T1 would be 1
     Q = {k: v for k, v in P.items() if k != 'dnorm2'}
     try:
