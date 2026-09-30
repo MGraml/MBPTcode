@@ -281,6 +281,12 @@ def _duplicates(omega, y, t1, Yt, dot, tol_omega):
     return out
 
 
+def _duplicate_drop(r, s, converged):
+    """Of two copies r < s of one root, the one to mark unconverged: r when s alone
+    converged, so a converged copy is kept, else s (converged: shape (nout,))."""
+    return r if converged[s] and not converged[r] else s
+
+
 def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
     """(λ, y, T1) of A_eff(ω): the eigenpair of maximal overlap with ref
     (ref None: the lowest), by eigh below dense_limit, else by Davidson."""
@@ -476,7 +482,10 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     max_fixed) steps comes back converged False with a RuntimeWarning. A level cut
     by nroots comes back whole: up to g - 1 roots more than asked. Two roots that
     land on one root (|Δω| < 2 tol_omega, full-vector overlap above 0.5) warn, and
-    the later is marked converged False; the root it missed is not recovered.
+    one copy is marked converged False, the stalled one if the other converged,
+    else the later; the root it missed is not recovered. Warnings name a root by
+    its ω and a level by its FoldResult.level index, since the result is sorted
+    by ω; a split level's roots count its joint steps in their own.
 
     Limits: the vectors of two distinct roots split by δ are determined to about
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
@@ -532,8 +541,10 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         lam, t1, yk, k, mode, conv, err = _iterate(step, om,
                                                    label=f'{label} root {r}', **kw)
         if not conv:
-            warnings.warn(f'{label}: root {r} not converged after {k} steps '
-                          f'({mode}), |lambda - omega| = {err:.2e} Ha',
+            # named by ω: the result is re-sorted, so the seed index r is not
+            # the caller's index
+            warnings.warn(f'{label}: the root at omega = {lam:.8f} Ha not converged '
+                          f'after {k} steps ({mode}), |lambda - omega| = {err:.2e} Ha',
                           RuntimeWarning, stacklevel=3)
         omega[r], y_out[:, r], t1_out[r], steps[r] = lam, yk, t1, k
         loop[r], converged[r] = mode, conv
@@ -552,19 +563,21 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         lbar, _, (lam, Z, ZR, t1), k, mode, conv, err = _iterate(
             step, float(e0[a:b].mean()), label=f'{label} level {lv}', **kw)
         if conv and lam.max() - lam.min() > _DEGENERATE:
-            warnings.warn(f'{label}: level {lv} split by '
-                          f'{lam.max() - lam.min():.1e} Ha in A_eff, not degenerate; '
-                          're-solved per root', RuntimeWarning, stacklevel=2)
+            warnings.warn(f'{label}: level {level[a]} at omega = {lbar:.8f} Ha split '
+                          f'by {lam.max() - lam.min():.1e} Ha in A_eff, not '
+                          'degenerate; re-solved per root, each a level of its own',
+                          RuntimeWarning, stacklevel=2)
             level[a:b] = nlev - 1 + np.arange(b - a)    # no partners: one level each
             nlev += b - a - 1
             # λ_j(ω) = ω per root, each from the level's final eigenvector Z_pj
             for j, r in enumerate(range(a, b)):
                 solve_root(r, float(lam[j]), Z[:, j])
+                steps[r] += k                           # the joint steps as well
             continue
         if not conv:
-            warnings.warn(f'{label}: level {lv} not converged after {k} steps '
-                          f'({mode}), |lambda - omega| = {err:.2e} Ha',
-                          RuntimeWarning, stacklevel=2)
+            warnings.warn(f'{label}: level {level[a]} at omega = {lbar:.8f} Ha not '
+                          f'converged after {k} steps ({mode}), |lambda - omega| = '
+                          f'{err:.2e} Ha', RuntimeWarning, stacklevel=2)
         omega[a:b], y_out[:, a:b], t1_out[a:b] = lbar, ZR, t1
         steps[a:b], converged[a:b] = k, conv
         loop[a:b] = [mode] * (b - a)
@@ -575,12 +588,13 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     Yt = {r: _doubles_image(pieces, y_out[:, r], omega[r], embed) for r in near}
     for r, s in _duplicates(omega, y_out, t1_out, Yt,
                             lambda Ya, Yb: _doubles_dot(pieces, Ya, Yb), tol_omega):
-        if converged[s]:
-            warnings.warn(f'{label}: roots {r} and {s} landed on one root at omega '
-                          f'= {omega[r]:.8f} Ha; root {s} marked unconverged, the '
-                          'root it missed is not recovered', RuntimeWarning,
-                          stacklevel=2)
-        converged[s] = False
+        drop = _duplicate_drop(r, s, converged)
+        keep = r + s - drop
+        warnings.warn(f'{label}: two roots landed on one root, at omega = '
+                      f'{omega[keep]:.8f} and {omega[drop]:.8f} Ha; the copy at '
+                      f'{omega[drop]:.8f} Ha marked unconverged, the root it missed '
+                      'is not recovered', RuntimeWarning, stacklevel=2)
+        converged[drop] = False
     # the fold can reorder the seeds: a lower root of M may land above a higher
     order = np.argsort(omega, kind='stable')
     return FoldResult(omega[order], y_out[:, order], t1_out[order], steps[order],

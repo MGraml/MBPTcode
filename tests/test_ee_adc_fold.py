@@ -394,6 +394,8 @@ def check_boundaries(mf, eps, B, no):
     ok &= check(not res.converged[0] and budget,
                 'an exhausted step budget reports converged False and warns',
                 f'converged {res.converged[0]}, steps {res.steps[0]}')
+    named = any(f'{res.omega[0]:.8f}' in str(w.message) for w in caught)
+    ok &= check(named, 'the budget warning names the root by its omega in res.omega')
     matvec, _, diag_s, _, _ = ee_fold.folded_operator(P, 0.3, spin='singlet')
     u = np.linspace(-1.0, 1.0, diag_s.size)
     u0 = u.copy()
@@ -717,7 +719,21 @@ def check_split_level():
     lv = res.level[:2].tolist()
     ok &= check(len(lv) == 2 and lv[0] != lv[1],
                 'the split roots are levels of their own', f'level {lv}')
+    # the joint solve alone takes 4 steps from M's seed, each root 2 more
+    ok &= check(res.steps.size >= 2 and int(res.steps[:2].min()) > 2,
+                "the split roots' steps include the joint solve's",
+                f'steps {res.steps.tolist()}')
     return ok
+
+
+def check_duplicate_drop():
+    """Of two copies of one root the converged one is kept: the earlier is marked
+    only when the later alone converged."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    got = [ee_fold._duplicate_drop(0, 1, np.array(c))
+           for c in ([True, True], [False, True], [True, False], [False, False])]
+    return check(got == [1, 0, 1, 1],
+                 'a duplicate marks the stalled copy, else the later one', str(got))
 
 
 def check_duplicate_images(eps, B, no):
@@ -765,6 +781,7 @@ def main():
     all_ok &= check_level_helpers()
     all_ok &= check_collapsing_pair()
     all_ok &= check_split_level()
+    all_ok &= check_duplicate_drop()
     all_ok &= check_duplicate_images(eps, B, no)
     all_ok &= check_level_crossing()
     all_ok &= check_eq53_transcription(eps, B, no)
