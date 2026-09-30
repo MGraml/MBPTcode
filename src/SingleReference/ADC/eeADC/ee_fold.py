@@ -47,7 +47,9 @@ from src.Solvers.davidson import overlap_pick, solve_symmetric
 
 FOLD_LEVELS = ('adc2', 'gf2', 'gw')
 _CHANNEL = {'singlet': +1.0, 'triplet': -1.0}
-_DEGENERATE = 1e-8      # Hartree: eigenvalues closer than this are one level
+_DEGENERATE = 1e-8      # Hartree: seeds spread by at most this are one level
+_SEED_RESIDUAL = 1e-9   # seeds of M: Ritz error |r|²/gap far below _DEGENERATE
+_DUPLICATE = 0.5        # full-vector overlap above which two roots are one
 
 
 def singles_flat_to_sb(u, no, nv):
@@ -173,19 +175,28 @@ def dense_effective(matvec, n):
 class FoldResult:
     """Per-root results of solve_folded.
 
-    omega : ndarray, shape (nroots,), Hartree, ascending
-    y : ndarray, shape (n, nroots), unit singles vectors in the channel basis
-    t1 : ndarray, shape (nroots,), singles weights in (0, 1]
-    steps : ndarray, shape (nroots,), outer iterations used
+    omega : ndarray, shape (nout,), Hartree, ascending
+    y : ndarray, shape (n, nout), unit singles vectors in the channel basis
+    x1 : ndarray, shape (n, nout), sqrt(T1) y, the singles part of the unit full
+        eigenvector; embed(x1[:, r]) is the full flat spin-orbital singles vector
+    t1 : ndarray, shape (nout,), singles weights in (0, 1]
+    level : ndarray, shape (nout,), int, the level of each root; the partners of a
+        degenerate level share its index and its omega, and a seed level that
+        A_eff splits gives each of its roots a level of its own
+    steps : ndarray, shape (nout,), outer iterations used
     loop : list of str, 'newton' or 'fixed' per root
-    converged : ndarray, shape (nroots,), bool
+    converged : ndarray, shape (nout,), bool
     embed : callable, channel vector -> full flat singles vector
+
+    nout >= nroots: a degenerate level cut by nroots comes back whole.
     """
 
-    def __init__(self, omega, y, t1, steps, loop, converged, embed):
+    def __init__(self, omega, y, t1, steps, loop, converged, embed, level):
         self.omega, self.y, self.t1 = omega, y, t1
         self.steps, self.loop, self.converged = steps, loop, converged
         self.embed = embed
+        self.level = np.asarray(level, int)
+        self.x1 = y * np.sqrt(t1)[None, :]
 
 
 def _diis_step(hist_omega, hist_err):
@@ -204,6 +215,55 @@ def _diis_step(hist_omega, hist_err):
         return float(lam[-1])
     beta = float(de @ (lam - lam.mean())) / var
     return float(lam.mean() - beta * e.mean())
+
+
+def _levels(e, tol=_DEGENERATE):
+    """(start, stop) runs of ascending values e whose spread, max minus min, is at
+    most tol: the degenerate levels, a lone value being a level of one."""
+    runs, start = [], 0
+    for k in range(1, len(e) + 1):
+        if k == len(e) or e[k] - e[start] > tol:
+            runs.append((start, k))
+            start = k
+    return runs
+
+
+def _doubles_dot(pieces, Ya, Yb):
+    """sum_K Ya_K Yb_K over SB doubles, in the metric of the full eigenvector."""
+    dnorm2 = pieces.get('dnorm2')
+    if dnorm2 is not None:
+        # polarisation: <a, b> = (|a + b|² - |a - b|²) / 4
+        return 0.25 * (float(dnorm2(Ya + Yb)) - float(dnorm2(Ya - Yb)))
+    no, nv = pieces['no'], pieces['nv']
+    return float(doubles_sb_to_flat(Ya, no, nv) @ doubles_sb_to_flat(Yb, no, nv))
+
+
+def _doubles_image(pieces, u, omega, embed):
+    """Ỹ_K = sum_jb V_K,jb u_jb / (ω - D_K) of a channel vector u, SB doubles."""
+    no, nv, be = pieces['no'], pieces['nv'], pieces['be']
+    y1 = singles_flat_to_sb(embed(u), no, nv)
+    return be.divide(pieces['V'](y1), omega - pieces['D'])
+
+
+def _duplicates(omega, y, t1, Yt, dot, tol_omega):
+    """Pairs (r, s), r < s, of roots that landed on one root: |ω_r - ω_s| below
+    2 tol_omega (two copies of a converged root differ by up to that) and a
+    full-vector overlap
+
+        |x_r · x_s| = sqrt(T1_r T1_s) |y_r · y_s + Ỹ_r · Ỹ_s|
+
+    above _DUPLICATE; it vanishes for distinct roots at any T1, where the singles
+    overlap alone need not. Yt: the roots' Ỹ; dot: the doubles inner product."""
+    out = []
+    for s in range(len(omega)):
+        for r in range(s):
+            if abs(omega[s] - omega[r]) >= 2.0 * tol_omega:
+                continue
+            ov = np.sqrt(t1[r] * t1[s]) * abs(float(y[:, r] @ y[:, s])
+                                              + dot(Yt[r], Yt[s]))
+            if ov > _DUPLICATE:
+                out.append((r, s))
+    return out
 
 
 def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
@@ -356,4 +416,5 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
             y_out[:, start:stop] = blk @ (U / np.sqrt(s)) @ U.T
         start = stop
     return FoldResult(omega, y_out, t1_out[order], steps[order],
-                      [loop[i] for i in order], converged[order], embed)
+                      [loop[i] for i in order], converged[order], embed,
+                      np.arange(nroots))

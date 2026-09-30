@@ -34,6 +34,7 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
      equals the adc2 A_eff.
   10. 'gw' is a fold level; pieces['dnorm2'] sets the doubles norm, the adc2 path
       unchanged.
+  11. the level and duplicate helpers on constructed values.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -533,6 +534,35 @@ def check_gw_hook(eps, B, no):
     return ok
 
 
+def check_level_helpers():
+    """_levels groups by spread, max minus min, without chaining; _duplicates flags
+    two copies of one root and passes distinct roots whatever their singles overlap."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    e = np.array([0.1, 0.1 + 4e-9, 0.1 + 8e-9, 0.1 + 1.2e-8, 0.3])
+    runs = ee_fold._levels(e)
+    ok &= check(runs == [(0, 3), (3, 4), (4, 5)],
+                'levels: spread at most 1e-8 Ha, no chaining', str(runs))
+
+    def dot(a, b):
+        return float(a @ b)
+
+    t1 = np.array([0.5, 0.5])
+    # distinct roots, T1 = 0.5 each: singles overlap -0.8, doubles overlap +0.8
+    y = np.array([[1.0, -0.8], [0.0, 0.6]])
+    Yt = [np.array([1.0, 0.0]), np.array([0.8, 0.6])]
+    got = ee_fold._duplicates(np.array([0.2, 0.2 + 1e-7]), y, t1, Yt, dot, 1e-6)
+    ok &= check(got == [], 'distinct roots with singles overlap 0.8 are no duplicate')
+    y2 = np.array([[1.0, -1.0], [0.0, 0.0]])
+    Yt2 = [np.array([1.0, 0.0]), np.array([-1.0, 0.0])]
+    got = ee_fold._duplicates(np.array([0.2, 0.2 + 1.5e-6]), y2, t1, Yt2, dot, 1e-6)
+    ok &= check(got == [(0, 1)],
+                'two copies of one root, 1.5 tol_omega apart, are one', str(got))
+    got = ee_fold._duplicates(np.array([0.2, 0.3]), y2, t1, Yt2, dot, 1e-6)
+    ok &= check(got == [], 'copies at distant omega are not compared')
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -553,6 +583,7 @@ def main():
     all_ok &= check_gf2_solves(mf, eps, B, no)
     all_ok &= check_boundaries(mf, eps, B, no)
     all_ok &= check_diis_step()
+    all_ok &= check_level_helpers()
     all_ok &= check_eq53_transcription(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
