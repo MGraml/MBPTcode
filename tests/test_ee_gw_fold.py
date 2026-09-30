@@ -16,6 +16,9 @@ Checks, water (RHF, DF factors), basis per check:
      1e-10 Ha; this pins sqrt(2), 1/2, the signs, the spin, and QPqb's normalisation.
   5. with TDA screening and without eq 70, the spectrum equals Bintrim and
      Berkelbach's H~ (bse_upfolded.build_hamiltonian_familiar), STO-3G, 1e-10 Ha.
+  6. QuAcK's RGW_phBSE_upfolded_sym on H2O/cc-pVDZ at QuAcK's geometry, four-index
+     HF, exact factors: S1, T1 and their 1h1p weight, TDA_W on and off, to 1e-5 eV and
+     1e-5 (runs 2026-09-25_quack-xcheck-h2o and 2026-09-30_quack-xcheck-h2o-upf-rpaw).
 
 Run: python tests/test_ee_gw_fold.py
 """
@@ -28,6 +31,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import numpy as np
 from pyscf import gto, scf
 
+from src.Base.constants import HARTREE_TO_EV
 from src.Base.pyscf_interface import DFIntegrals, get_orbital_energies
 from src.SingleReference.ADC.eeADC import ee_fold, ee_gw_pieces, ee_r_sigma_df
 from src.SingleReference.ADC.eeADC.ee_spin_blocks import SB
@@ -271,6 +275,38 @@ def check_bintrim_berkelbach():
     return ok
 
 
+QUACK_H2O = 'O 0.0000 0.0000 0.0000; H 0.7571 0.0000 0.5861; H -0.7571 0.0000 0.5861'
+# (screening, spin): (omega eV, Z) of QuAcK's lowest 1h1p-dominated upfolded root
+QUACK_UPF = {('tda', 'singlet'): (8.427847, 0.964662),
+             ('tda', 'triplet'): (7.632712, 0.966154),
+             ('rpa', 'singlet'): (8.632125, 0.971539),
+             ('rpa', 'triplet'): (7.804563, 0.972781)}
+
+
+def check_quack_h2o():
+    """Check 3 pinned: the fold against QuAcK's printed roots, 1e-5 eV and 1e-5 on
+    T1 (QuAcK prints 1e-6)."""
+    mol = gto.M(atom=QUACK_H2O, basis='cc-pvdz', verbose=0)
+    mf = scf.RHF(mol)
+    mf.conv_tol = 1e-12
+    mf.kernel()
+    eps = np.asarray(get_orbital_energies(mf, representation='spatial'), float)
+    no = mol.nelectron // 2
+    B = DFIntegrals.from_scf(mol, mf, exact=True).B_aa
+    ok = True
+    for screening in ('tda', 'rpa'):
+        P = ee_gw_pieces.build_pieces_gw(eps, B, no, screening=screening)
+        for spin in ('singlet', 'triplet'):
+            w_q, z_q = QUACK_UPF[(screening, spin)]
+            res = ee_fold.solve_folded(P, 1, spin=spin, tol_omega=1e-10)
+            d = res.omega[0] * HARTREE_TO_EV - w_q
+            ok &= check(abs(d) < 1e-5, f'{screening} W, {spin}: omega = QuAcK',
+                        f'{d:+.1e} eV')
+            ok &= check(abs(res.t1[0] - z_q) < 1e-5, f'{screening} W, {spin}: '
+                        'T1 = QuAcK Z', f'{res.t1[0] - z_q:+.1e}')
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water('6-31g')
@@ -279,6 +315,7 @@ def main():
     all_ok &= check_davidson_branch(eps, B, no)
     all_ok &= check_eq66_transcription(eps, B, no)
     all_ok &= check_bintrim_berkelbach()
+    all_ok &= check_quack_h2o()
     all_ok &= check_boundaries(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
