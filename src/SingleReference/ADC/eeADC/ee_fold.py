@@ -45,7 +45,7 @@ from src.SingleReference.ADC.eeADC import ee_r_sigma as _r
 from src.SingleReference.ADC.eeADC.ee_spin_blocks import SB
 from src.Solvers.davidson import overlap_pick, solve_symmetric
 
-FOLD_LEVELS = ('adc2', 'gf2')
+FOLD_LEVELS = ('adc2', 'gf2', 'gw')
 _CHANNEL = {'singlet': +1.0, 'triplet': -1.0}
 _DEGENERATE = 1e-8      # Hartree: eigenvalues closer than this are one level
 
@@ -94,7 +94,9 @@ def folded_operator(pieces, omega, spin=None):
         (no, nv, no, nv), index order (i, a, j, b)), 'V' (SB singles, blocks
         (no, nv), (i, a) -> SB doubles, blocks (no, no, nv, nv), (i, j, a, b)),
         'Vt' (the reverse map), 'D' (ndarray, shape (no, no, nv, nv), index
-        order (i, j, a, b)), 'level', 'no', 'nv', 'be'.
+        order (i, j, a, b), or, at level gw, shape (no, nv, nm), index order
+        (k, c, m)), 'level', 'no', 'nv', 'be'; 'dnorm2' (optional: SB doubles
+        -> float sum_K Y_K², for a doubles layout other than adc2's).
     omega : float or None
         Frequency in Hartree; None gives the bare singles block M.
     spin : {'singlet', 'triplet', None}
@@ -115,6 +117,7 @@ def folded_operator(pieces, omega, spin=None):
     _check_level(pieces)
     no, nv, be = pieces['no'], pieces['nv'], pieces['be']
     M, V, Vt, D = pieces['M'], pieces['V'], pieces['Vt'], pieces['D']
+    dnorm2 = pieces.get('dnorm2')
     n_full = 2 * no * nv
     if spin is None:
         def embed(u):
@@ -151,8 +154,11 @@ def folded_operator(pieces, omega, spin=None):
             return 0.0
         u = _check_vector(u, n)
         y1 = singles_flat_to_sb(embed(u), no, nv)
+        Yt = be.divide(V(y1), denom)
+        if dnorm2 is not None:
+            return float(dnorm2(Yt))
         # Y_K = sum_jb V_K,jb y_jb / (D_K - ω), flat; then sum_K Y_K²
-        Yf = doubles_sb_to_flat(be.divide(V(y1), denom), no, nv)
+        Yf = doubles_sb_to_flat(Yt, no, nv)
         return float(Yf @ Yf)
 
     return matvec, dmatvec, diag_s, embed, restrict

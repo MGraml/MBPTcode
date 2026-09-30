@@ -32,6 +32,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
      transcribed in spin orbitals on the same DF factors) equals the gf2 A_eff
      element by element at w = None and 0.25 Ha to 1e-10 Ha; with eq 57 added it
      equals the adc2 A_eff.
+  10. 'gw' is a fold level; pieces['dnorm2'] sets the doubles norm, the adc2 path
+      unchanged.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -503,6 +505,34 @@ def check_eq53_transcription(eps, B, no):
     return ok
 
 
+def check_gw_hook(eps, B, no):
+    """'gw' is a fold level; an optional pieces['dnorm2'] is the doubles norm dmatvec
+    takes, and without it the adc2 norm is the flat layout's, bitwise."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    nv = B.shape[1] - no
+    ok &= check('gw' in ee_fold.FOLD_LEVELS, "'gw' is a fold level")
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    _, dmv, diag_s, embed, _ = ee_fold.folded_operator(P, 0.3, spin='singlet')
+    u = np.linspace(-1.0, 1.0, diag_s.size)
+    u /= np.linalg.norm(u)
+    y1 = ee_fold.singles_flat_to_sb(embed(u), no, nv)
+    Yf = ee_fold.doubles_sb_to_flat(P['be'].divide(P['V'](y1), P['D'] - 0.3), no, nv)
+    ok &= check(dmv(u) == float(Yf @ Yf), 'adc2: dmatvec is the flat-layout norm')
+    calls = []
+
+    def dnorm2(Y):
+        calls.append(1)
+        f = ee_fold.doubles_sb_to_flat(Y, no, nv)
+        return float(f @ f)
+
+    _, dmv2, _, _, _ = ee_fold.folded_operator(dict(P, dnorm2=dnorm2), 0.3,
+                                               spin='singlet')
+    ok &= check(dmv2(u) == dmv(u) and len(calls) == 1,
+                "pieces['dnorm2'] is the norm dmatvec takes")
+    return ok
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -516,6 +546,7 @@ def main():
     all_ok &= check_pieces(eps, B, no)
     all_ok &= check_gf2(eps, B, no)
     all_ok &= check_folded_operator(mf, eps, B, no)
+    all_ok &= check_gw_hook(eps, B, no)
     all_ok &= check_solve_folded(mf, eps, B, no)
     all_ok &= check_degenerate_set()
     all_ok &= check_routes_and_channels(mf, eps, B, no)
