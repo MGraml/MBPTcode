@@ -10,6 +10,9 @@ Checks, water (RHF, DF factors), basis per check:
      T1 is that eigenvector's singles weight to 1e-8.
   3. the fold and the builder leave D, W and the input vector untouched; an unknown
      screening raises ValueError.
+  4. eq 66 transcribed from QuAcK's loops (RGW_phBSE_upfolded_sym.f90 86-216) on
+     CasidaSolver's modes, both screenings: M per channel and the full spectrum to
+     1e-10 Ha; this pins sqrt(2), 1/2, the signs, the spin, and QPqb's normalisation.
 
 Run: python tests/test_ee_gw_fold.py
 """
@@ -134,11 +137,94 @@ def check_boundaries(eps, B, no):
     return ok
 
 
+def quack_supermatrix(eps, B, no, spin, screening):
+    """Eq 66 spin-adapted, transcribed from QuAcK's RGW_phBSE_upfolded_sym.f90
+    (lines 86-216) and RGW_excitation_density.f90 (lines 40-50), on CasidaSolver's
+    modes renormalised to (X - Y)^T (X + Y) = 1. QuAcK's ERI(p,q,r,s) is
+    <pq|rs> = (pr|qs); eri here is (pq|rs)."""
+    from src.SingleReference.LinearResponse.casida import CasidaSolver
+    norb = len(eps)
+    nv = norb - no
+    o, v = slice(0, no), slice(no, norb)
+    eri = np.einsum('Qpq,Qrs->pqrs', B, B, optimize=True)
+    eo, ev = eps[o], eps[v]
+    ns = no * nv
+    # phRLR on eHF, singlet direct RPA: A = de + 2 (ia|jb), B = 2 (ia|jb) or 0
+    iajb = eri[o, v, o, v].reshape(ns, ns)
+    A = np.diag((ev[None, :] - eo[:, None]).ravel()) + 2.0 * iajb
+    Bw = np.zeros_like(A) if screening == 'tda' else 2.0 * iajb
+    Om, X, Y = CasidaSolver(A, Bw).solve(tda=(screening == 'tda'))
+    XpY = (X + Y) / np.sqrt(np.einsum('Im,Im->m', X - Y, X + Y))[None, :]
+    nm = Om.size
+    # rho(p,q,m) = sum_jb ERI(p,j,q,b) XpY(jb,m) = sum_jb (pq|jb) XpY(jb,m)
+    rho = np.einsum('pqI,Im->pqm', eri[:, :, o, v].reshape(norb, norb, ns), XpY,
+                    optimize=True)
+    H = np.zeros((ns + ns * nm, ns + ns * nm))
+    kappa = 2.0 if spin == 'singlet' else 0.0
+    for i in range(no):
+        for a in range(nv):
+            ia = i * nv + a
+            for j in range(no):
+                for b in range(nv):
+                    jb = j * nv + b
+                    # (eHF(a) - eHF(i)) d_ij d_ab + kappa ERI(i,b,a,j) - ERI(i,b,j,a)
+                    h = kappa * eri[i, no + a, j, no + b] - eri[i, j, no + a, no + b]
+                    if i == j and a == b:
+                        h += ev[a] - eo[i]
+                    if i == j:
+                        # + rho(a,k,m) rho(b,k,m) [1/(e_a - e_k + Om) + 1/(e_b - ...)]
+                        rr = rho[no + a, o, :] * rho[no + b, o, :]
+                        h += np.sum(rr / (ev[a] - eo[:, None] + Om[None, :])
+                                    + rr / (ev[b] - eo[:, None] + Om[None, :]))
+                    if a == b:
+                        # - rho(i,c,m) rho(j,c,m) [1/(e_i - e_c - Om) + 1/(e_j - ...)]
+                        rr = rho[i, v, :] * rho[j, v, :]
+                        h -= np.sum(rr / (eo[i] - ev[:, None] - Om[None, :])
+                                    + rr / (eo[j] - ev[:, None] - Om[None, :]))
+                    H[ia, jb] = h
+            # Jph + Kph = - sqrt(2) d_ac rho(i,k,m) + sqrt(2) d_ik rho(a,c,m)
+            blk = np.zeros((no, nv, nm))
+            blk[:, a, :] -= np.sqrt(2.0) * rho[i, o, :]
+            blk[i, :, :] += np.sqrt(2.0) * rho[no + a, v, :]
+            H[ia, ns:] = blk.ravel()
+            H[ns:, ia] = blk.ravel()
+    # C2h2p(iam) = Om(m) + eHF(a) - eHF(i)
+    H[ns:, ns:] = np.diag((Om[None, None, :] + ev[None, :, None]
+                           - eo[:, None, None]).ravel())
+    return H
+
+
+def check_eq66_transcription(eps, B, no):
+    """The pieces against QuAcK's loops, with modes from CasidaSolver: the singles
+    block element by element per channel, and the full spectrum."""
+    ok = True
+    nv = len(eps) - no
+    ns = no * nv
+    for screening in ('tda', 'rpa'):
+        P = ee_gw_pieces.build_pieces_gw(eps, B, no, screening=screening)
+        Hq = {s: quack_supermatrix(eps, B, no, s, screening)
+              for s in ('singlet', 'triplet')}
+        Ma, Mx = P['M'].get('aaaa'), P['M'].get('aabb')
+        for spin, sgn in (('singlet', 1.0), ('triplet', -1.0)):
+            Mch = (Ma + sgn * Mx).reshape(ns, ns)
+            d = float(np.max(np.abs(Mch - Hq[spin][:ns, :ns])))
+            ok &= check(d < 1e-10, f'{screening} {spin}: M equals QuAcK singles block',
+                        f'max |d| {d:.1e} Ha')
+        H, _ = dense_supermatrix(P)
+        ref = np.sort(np.concatenate([np.linalg.eigvalsh(Hq[s]) for s in Hq]))
+        got = np.linalg.eigvalsh(H)
+        d = float(np.max(np.abs(got - ref))) if got.size == ref.size else np.inf
+        ok &= check(d < 1e-10, f'{screening}: the full spectrum equals QuAcK form',
+                    f'max |d| {d:.1e} Ha over {ref.size}')
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water('6-31g')
     all_ok &= check_pieces(eps, B, no)
     all_ok &= check_fold_vs_unfolded(eps, B, no)
+    all_ok &= check_eq66_transcription(eps, B, no)
     all_ok &= check_boundaries(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
