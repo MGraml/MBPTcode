@@ -260,7 +260,8 @@ def _duplicates(omega, y, t1, Yt, dot, tol_omega):
 
     above _DUPLICATE; it vanishes for distinct roots at any T1, where the singles
     overlap alone need not. omega, t1: shape (nout,); y: shape (n, nout), unit
-    singles in the channel basis; Yt: the roots' Ỹ (_doubles_image), nout entries;
+    singles in the channel basis; Yt: the roots' Ỹ (_doubles_image), indexed by
+    root, read only for roots within 2 tol_omega of another;
     dot: the doubles inner product (_doubles_dot)."""
     out = []
     for s in range(len(omega)):
@@ -546,7 +547,11 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         omega[a:b], y_out[:, a:b], t1_out[a:b] = lbar, ZR, t1
         steps[a:b], converged[a:b] = k, conv
         loop[a:b] = [mode] * (b - a)
-    Yt = [_doubles_image(pieces, y_out[:, r], omega[r], embed) for r in range(nout)]
+    # an image is a whole doubles vector: build it only for a root within
+    # 2 tol_omega of another, the only pairs _duplicates compares
+    near = {i for s in range(nout) for r in range(s)
+            if abs(omega[s] - omega[r]) < 2.0 * tol_omega for i in (r, s)}
+    Yt = {r: _doubles_image(pieces, y_out[:, r], omega[r], embed) for r in near}
     for r, s in _duplicates(omega, y_out, t1_out, Yt,
                             lambda Ya, Yb: _doubles_dot(pieces, Ya, Yb), tol_omega):
         if converged[s]:

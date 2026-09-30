@@ -37,7 +37,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       unchanged.
   11. the level and duplicate helpers on constructed values.
   12. a collapsing distinct pair is reported, the kept root exact; a level split in
-      A_eff warns and each root is a supermatrix eigenvalue.
+      A_eff warns and each root is a supermatrix eigenvalue; distinct roots cost the
+      duplicate check no doubles image.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -691,6 +692,28 @@ def check_split_level():
     return ok
 
 
+def check_duplicate_images(eps, B, no):
+    """The duplicate check builds a doubles image only for a root within
+    2 tol_omega of another: none for water's distinct roots."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    calls = []
+    orig = ee_fold._doubles_image
+
+    def counted(*args):
+        calls.append(1)
+        return orig(*args)
+
+    ee_fold._doubles_image = counted
+    try:
+        res = ee_fold.solve_folded(P, 3, spin='singlet')
+    finally:
+        ee_fold._doubles_image = orig
+    return check(len(calls) == 0 and bool(res.converged.all()),
+                 'distinct roots: the duplicate check builds no doubles image',
+                 f'{len(calls)} image(s)')
+
+
 def _sb_close(A, Bk, tol=1e-12):
     keys = set(A.keys()) | set(Bk.keys())
     return all(np.allclose(A.get(k) if A.get(k) is not None else 0.0,
@@ -714,6 +737,7 @@ def main():
     all_ok &= check_level_helpers()
     all_ok &= check_collapsing_pair()
     all_ok &= check_split_level()
+    all_ok &= check_duplicate_images(eps, B, no)
     all_ok &= check_eq53_transcription(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
