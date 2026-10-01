@@ -47,7 +47,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       far below tol_residual.
   14. the count's blind spots from the review of 38b97cc: a state M's diagonal
       ranks last but folded lowest, a missing branch mixed with a found root at
-      the cut (25 points), and one count solve per call when nothing is missing.
+      the cut (25 points), and one count solve per call when nothing is missing; a
+      bracket narrower than tol_omega stops the index solve at once.
   15. a block of columns through folded_operator (adc2, gf2, gw; both channels and
       spin None; omega None and 0.3 Ha), through the adc3 couplings at second order,
       and through dense_effective in blocks of 3 and n equals the same columns one
@@ -965,6 +966,40 @@ def check_batched(eps, B, no):
     return ok
 
 
+def check_index_bracket():
+    """The index solve stops once its bracket is narrower than tol_omega, not at the
+    step budget: a stub A_eff whose λ sits 1e-4 above every ω (the eigensolver's
+    noise at a root pinned by a zero-width bracket) costs one step; a consistent
+    λ(ω) = 5 - ω/2 with T1 = 2/3 still converges by Newton."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+
+    def stub(slope, offset, dmv_value):
+        def lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols,
+                      tol=None):
+            return (np.array([offset + slope * omega]), np.ones((1, 1)),
+                    lambda v: dmv_value)
+        return lowest_at
+
+    orig = ee_fold._lowest_at
+    out = {}
+    try:
+        for tag, f, om, lo, hi in (('pinned', stub(1.0, 1e-4, 0.0), 0.5, 0.5, 0.5),
+                                   ('newton', stub(-0.5, 5.0, 0.5), 2.0, 2.0, 4.0)):
+            ee_fold._lowest_at = f
+            out[tag] = ee_fold._index_solve(None, None, 0, 1, om, lo, hi, None, 0,
+                                            1e-6, 1e-6, 42, 'test', 0)
+    finally:
+        ee_fold._lowest_at = orig
+    k, conv = out['pinned'][3], out['pinned'][4]
+    ok = check(k == 1 and not conv, 'index solve: a bracket narrower than tol_omega '
+               'stops it at once, unconverged', f'{k} step(s)')
+    lam, k, conv = out['newton'][0], out['newton'][3], out['newton'][4]
+    ok &= check(conv and k <= 3 and abs(lam[0] - 10 / 3) < 1e-6,
+                'index solve: a consistent branch converges by Newton',
+                f'{k} steps, lambda {lam[0]:.8f}')
+    return ok
+
+
 def check_dense_default():
     """dense_limit=None takes pieces['dense_limit']: adc2 declares none and runs
     Davidson, gw declares 40 and builds A_eff densely on water/6-31G (n 40); an
@@ -1022,6 +1057,7 @@ def main():
     all_ok &= check_eq53_transcription(eps, B, no)
     all_ok &= check_seeding_gap()
     all_ok &= check_index_solve(eps, B, no)
+    all_ok &= check_index_bracket()
     all_ok &= check_batched(eps, B, no)
     all_ok &= check_dense_default()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')

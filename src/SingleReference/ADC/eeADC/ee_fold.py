@@ -564,9 +564,10 @@ def _index_solve(pieces, spin, a, b, om, lo, hi, X, dense, tol_residual, tol_ome
     branch, or a degenerate group solved at one ω): λ̄(ω) = ω, λ̄ the mean of
     λ_j(ω) over the group. Below min_K D_K λ̄(ω) - ω falls strictly, so the root
     is unique and stays inside [lo, hi]; Newton ω + (λ̄ - ω) T̄1 from om,
-    bisection when a step leaves the bracket. X (n, c): the previous eigenvectors,
-    the Davidson start. Returns λ_j (g,), Z (n, g), T1 (g,), steps, converged and
-    |λ̄ - ω| of the last step."""
+    bisection when a step leaves the bracket, a stop (unconverged) once the bracket
+    is narrower than tol_omega, where the eigensolver's precision limits |λ̄ - ω|.
+    X (n, c): the previous eigenvectors, the Davidson start. Returns λ_j (g,),
+    Z (n, g), T1 (g,), steps, converged and |λ̄ - ω| of the last step."""
     k = 0
     while True:
         lam, X, dmv = _lowest_at(pieces, om, spin, b, dense, tol_residual, label, X)
@@ -581,6 +582,8 @@ def _index_solve(pieces, spin, a, b, om, lo, hi, X, dense, tol_residual, tol_ome
         if abs(err) < tol_omega or k >= max_steps:
             return lam, Z, t1, k, abs(err) < tol_omega, abs(err)
         lo, hi = (om, hi) if err > 0 else (lo, om)
+        if hi - lo < tol_omega:
+            return lam, Z, t1, k, False, abs(err)
         nxt = om + err * float(t1.mean())          # Newton on λ̄(ω) - ω
         om = nxt if lo < nxt < hi else 0.5 * (lo + hi)
 
@@ -787,9 +790,11 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
                 solve_index(j, j + 1, lam_c, X_c, dmv_c, cut)
             return
         if not conv:
+            why = ('' if k >= max_newton + max_fixed else '; its bracket closed '
+                   'first, so tol_residual limits it')
             warnings.warn(f'{label}: the root of branch {a} at omega = '
                           f'{lam.mean():.8f} Ha not converged after {k} steps '
-                          f'(index), |lambda - omega| = {err:.2e} Ha',
+                          f'(index), |lambda - omega| = {err:.2e} Ha{why}',
                           RuntimeWarning, stacklevel=3)
         lv, nlev = nlev, nlev + 1
         for j in range(b - a):
