@@ -55,6 +55,7 @@ _CHANNEL = {'singlet': +1.0, 'triplet': -1.0}
 _DEGENERATE = 1e-8      # Hartree: seeds spread by at most this are one level
 _SEED_RESIDUAL = 1e-9   # seeds of M: Ritz error |r|²/gap far below _DEGENERATE
 _DUPLICATE = 0.5        # full-vector overlap above which two roots are one
+_COUNT_ROUNDS = 3       # seeding rounds of the count check before it warns
 
 
 def singles_flat_to_sb(u, no, nv):
@@ -199,7 +200,8 @@ class FoldResult:
     converged : ndarray, shape (nout,), bool
     embed : callable, channel vector -> full flat singles vector
 
-    nout >= nroots: a degenerate level cut by nroots comes back whole.
+    nout >= nroots: a degenerate level cut by nroots comes back whole. Level
+    indices need not be consecutive: roots solved past the cut are dropped.
     """
 
     def __init__(self, omega, y, t1, steps, loop, converged, embed, level):
@@ -459,6 +461,33 @@ def _seed_levels(m0, diag_s, n, nroots, dense, tol_residual, label):
         extra *= 2
 
 
+def _branches_below(pieces, omega, spin, k, dense, tol_residual, label, tol):
+    """The lowest eigenpairs of A_eff(ω), lowest first, λ (m,) and X (n, m): every
+    one with λ_j ≤ ω + tol, and at least k. Below min_K D_K each λ_j(ω) falls with
+    ω (dλ/dω ≤ 0), so λ_j(ω) ≤ ω exactly when the j-th folded root lies at or
+    below ω: the count of the first kind is the count of folded roots up to ω. On
+    the Davidson branch the solve asks for k and doubles that while the highest
+    returned is still at or below ω + tol."""
+    matvec, _, diag_s, _, _ = folded_operator(pieces, omega, spin)
+    n = diag_s.size
+    k = min(k, n)
+    if dense:
+        # sum_q A_pq v_qm = w_m v_pm, A built from n matvecs
+        w, v = np.linalg.eigh(dense_effective(matvec, n))
+    else:
+        while True:
+            # sum_q A_pq x_qm = w_m x_pm, the k lowest by Davidson
+            w, v, _ = solve_symmetric(matvec, diag_s, nroots=k,
+                                      tol_residual=tol_residual,
+                                      label=label + ' count')
+            w, v = np.asarray(w, float), np.asarray(v, float)
+            if w[-1] > omega + tol or k == n:
+                break
+            k = min(2 * k, n)
+    m = max(k, int(np.count_nonzero(w <= omega + tol)))
+    return w[:m], v[:, :m]
+
+
 def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
                  t_min=0.3, max_newton=12, max_fixed=30, dense_limit=2000,
                  verbose=0):
@@ -483,9 +512,19 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     by nroots comes back whole: up to g - 1 roots more than asked. Two roots that
     land on one root (|Δω| < 2 tol_omega, full-vector overlap above 0.5) warn, and
     one copy is marked converged False, the stalled one if the other converged,
-    else the later; the root it missed is not recovered. Warnings name a root by
-    its ω and a level by its FoldResult.level index, since the result is sorted
-    by ω; a split level's roots count its joint steps in their own.
+    else the later; the count check below then seeds the root it missed. Warnings
+    name a root by its ω and a level by its FoldResult.level index, since the
+    result is sorted by ω; a split level's roots count its joint steps in their own.
+
+    Completeness: below min_K D_K each eigenvalue λ_j(ω) of A_eff(ω), counted from
+    the lowest, falls with ω (dλ/dω ≤ 0), so λ_j(ω) = ω has one root ω_j, and
+    ω_1 ≤ ω_2 ≤ ...: the folded roots at or below ω number the λ_j(ω) ≤ ω. The
+    fold can reorder the seeds of M, so at ω_c, the nroots-th lowest root found,
+    that number is compared with the roots found (to 2 tol_omega); missing roots
+    are seeded from the eigenvectors of A_eff(ω_c) that no root found follows
+    (overlap below 0.5) and solved as above, for at most 3 rounds, after which a
+    RuntimeWarning names the count. With ω_c at or above min_K D_K the count is
+    not checked, with a RuntimeWarning. Roots solved past the cut are dropped.
 
     Limits: the vectors of two distinct roots split by δ are determined to about
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
@@ -528,75 +567,123 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     nfollow = min(nroots + 2, n)
     label = f'ee-ADC fold ({spin or "both"})'
     e0, X0, runs = _seed_levels(m0, diag_s, n, nroots, dense, tol_residual, label)
-    nout = runs[-1][1]
-    omega, t1_out = np.empty(nout), np.empty(nout)
-    y_out = np.empty((n, nout))
-    level, steps = np.empty(nout, int), np.zeros(nout, int)
-    loop, converged = [''] * nout, np.zeros(nout, bool)
+    # per root, appended as levels are solved; copy marks a duplicate's copy
+    omega, y_out, t1_out, level, steps, loop, converged, copy = ([] for _ in range(8))
     kw = dict(tol_omega=tol_omega, t_min=t_min, max_newton=max_newton,
               max_fixed=max_fixed, verbose=verbose)
+    nlev = 0
 
-    def solve_root(r, om, y):
+    def solve_root(om, y, lv, k0=0):
         step = _root_step(pieces, spin, y, nfollow, dense, tol_residual, label)
-        lam, t1, yk, k, mode, conv, err = _iterate(step, om,
-                                                   label=f'{label} root {r}', **kw)
+        lam, t1, yk, k, mode, conv, err = _iterate(
+            step, om, label=f'{label} root {len(omega)}', **kw)
         if not conv:
-            # named by ω: the result is re-sorted, so the seed index r is not
-            # the caller's index
+            # named by ω: the result is re-sorted, so the seed index is not the
+            # caller's index
             warnings.warn(f'{label}: the root at omega = {lam:.8f} Ha not converged '
                           f'after {k} steps ({mode}), |lambda - omega| = {err:.2e} Ha',
-                          RuntimeWarning, stacklevel=3)
-        omega[r], y_out[:, r], t1_out[r], steps[r] = lam, yk, t1, k
-        loop[r], converged[r] = mode, conv
+                          RuntimeWarning, stacklevel=4)
+        for out, v in zip((omega, y_out, t1_out, level, steps, loop, converged, copy),
+                          (lam, yk, t1, lv, k + k0, mode, conv, False)):
+            out.append(v)
 
-    nlev = 0
-    for lv, (a, b) in enumerate(runs):
-        level[a:b] = nlev
-        nlev += 1
-        if b - a == 1:
-            # λ(ω) = ω on the root's own followed vector
-            solve_root(a, float(e0[a]), X0[:, a])
-            continue
-        # λ̄(ω) = ω, λ̄ the mean of the b - a eigenvalues of largest projection
-        # onto the span of the level's seeds X0[:, a:b]
-        step = _level_step(pieces, spin, X0[:, a:b], dense, tol_residual, label)
-        lbar, _, (lam, Z, ZR, t1), k, mode, conv, err = _iterate(
-            step, float(e0[a:b].mean()), label=f'{label} level {lv}', **kw)
-        if conv and lam.max() - lam.min() > _DEGENERATE:
-            warnings.warn(f'{label}: level {level[a]} at omega = {lbar:.8f} Ha split '
-                          f'by {lam.max() - lam.min():.1e} Ha in A_eff, not '
-                          'degenerate; re-solved per root, each a level of its own',
+    def solve_seeds(e, X, runs):
+        """Solve the levels runs, (start, stop) into the seeds e (m,), X (n, m)."""
+        nonlocal nlev
+        for a, b in runs:
+            lv, nlev = nlev, nlev + 1
+            if b - a == 1:
+                # λ(ω) = ω on the root's own followed vector
+                solve_root(float(e[a]), X[:, a], lv)
+                continue
+            # λ̄(ω) = ω, λ̄ the mean of the b - a eigenvalues of largest projection
+            # onto the span of the level's seeds X[:, a:b]
+            step = _level_step(pieces, spin, X[:, a:b], dense, tol_residual, label)
+            lbar, _, (lam, Z, ZR, t1), k, mode, conv, err = _iterate(
+                step, float(e[a:b].mean()), label=f'{label} level {lv}', **kw)
+            if conv and lam.max() - lam.min() > _DEGENERATE:
+                warnings.warn(f'{label}: level {lv} at omega = {lbar:.8f} Ha split '
+                              f'by {lam.max() - lam.min():.1e} Ha in A_eff, not '
+                              'degenerate; re-solved per root, each a level of its '
+                              'own', RuntimeWarning, stacklevel=3)
+                # λ_j(ω) = ω per root, each from the level's final eigenvector
+                # Z_pj; no partners, one level each, the joint steps counted too
+                for j in range(b - a):
+                    if j:
+                        lv, nlev = nlev, nlev + 1
+                    solve_root(float(lam[j]), Z[:, j], lv, k0=k)
+                continue
+            if not conv:
+                warnings.warn(f'{label}: level {lv} at omega = {lbar:.8f} Ha not '
+                              f'converged after {k} steps ({mode}), |lambda - omega| '
+                              f'= {err:.2e} Ha', RuntimeWarning, stacklevel=3)
+            for j in range(b - a):
+                for out, v in zip((omega, y_out, t1_out, level, steps, loop,
+                                   converged, copy),
+                                  (lbar, ZR[:, j], t1[j], lv, k, mode, conv, False)):
+                    out.append(v)
+
+    def mark_copies():
+        """Mark the later copy of two roots that landed on one root, and warn."""
+        om, Y = np.asarray(omega), np.column_stack(y_out)
+        # an image is a whole doubles vector: build it only for a root within
+        # 2 tol_omega of another, the only pairs _duplicates compares
+        near = {i for s in range(om.size) for r in range(s)
+                if abs(om[s] - om[r]) < 2.0 * tol_omega for i in (r, s)}
+        Yt = {r: _doubles_image(pieces, Y[:, r], om[r], embed) for r in near}
+        for r, s in _duplicates(om, Y, np.asarray(t1_out), Yt,
+                                lambda Ya, Yb: _doubles_dot(pieces, Ya, Yb),
+                                tol_omega):
+            if copy[r] or copy[s]:
+                continue
+            drop = _duplicate_drop(r, s, converged)
+            keep = r + s - drop
+            warnings.warn(f'{label}: two roots landed on one root, at omega = '
+                          f'{om[keep]:.8f} and {om[drop]:.8f} Ha; the copy at '
+                          f'{om[drop]:.8f} Ha marked unconverged', RuntimeWarning,
+                          stacklevel=3)
+            converged[drop], copy[drop] = False, True
+
+    solve_seeds(e0, X0, runs)
+    mark_copies()
+    # the count check: the folded roots at or below ω_c number the eigenvalues
+    # λ_j(ω_c) ≤ ω_c (_branches_below), valid while ω_c lies below every D_K
+    tol = 2.0 * tol_omega
+    d_min = float(np.min(pieces['D']))
+    for rnd in range(_COUNT_ROUNDS + 1):
+        found = np.sort([w for w, c in zip(omega, copy) if not c])
+        cut = float(found[min(nroots, found.size) - 1])
+        if cut >= d_min:
+            warnings.warn(f'{label}: omega = {cut:.8f} Ha lies at or above the lowest '
+                          f'doubles energy {d_min:.8f} Ha; the count of roots below '
+                          'it is not checked', RuntimeWarning, stacklevel=2)
+            break
+        lam, X = _branches_below(pieces, cut, spin, nroots, dense, tol_residual,
+                                 label, tol)
+        missing = max(int(np.count_nonzero(lam <= cut + tol))
+                      - int(np.count_nonzero(found <= cut + tol)),
+                      nroots - found.size)
+        if missing <= 0:
+            break
+        # seeds: the eigenvectors at ω_c that no root found so far follows,
+        # max_r |sum_p y_pr x_pj| < 0.5
+        Yf = np.column_stack([y for y, c in zip(y_out, copy) if not c])
+        new = [j for j in range(lam.size)
+               if float(np.max(np.abs(Yf.T @ X[:, j]))) < 0.5]
+        if rnd == _COUNT_ROUNDS or not new:
+            warnings.warn(f'{label}: {missing} root(s) at or below omega = '
+                          f'{cut:.8f} Ha not found after {rnd} seeding round(s)',
                           RuntimeWarning, stacklevel=2)
-            level[a:b] = nlev - 1 + np.arange(b - a)    # no partners: one level each
-            nlev += b - a - 1
-            # λ_j(ω) = ω per root, each from the level's final eigenvector Z_pj
-            for j, r in enumerate(range(a, b)):
-                solve_root(r, float(lam[j]), Z[:, j])
-                steps[r] += k                           # the joint steps as well
-            continue
-        if not conv:
-            warnings.warn(f'{label}: level {level[a]} at omega = {lbar:.8f} Ha not '
-                          f'converged after {k} steps ({mode}), |lambda - omega| = '
-                          f'{err:.2e} Ha', RuntimeWarning, stacklevel=2)
-        omega[a:b], y_out[:, a:b], t1_out[a:b] = lbar, ZR, t1
-        steps[a:b], converged[a:b] = k, conv
-        loop[a:b] = [mode] * (b - a)
-    # an image is a whole doubles vector: build it only for a root within
-    # 2 tol_omega of another, the only pairs _duplicates compares
-    near = {i for s in range(nout) for r in range(s)
-            if abs(omega[s] - omega[r]) < 2.0 * tol_omega for i in (r, s)}
-    Yt = {r: _doubles_image(pieces, y_out[:, r], omega[r], embed) for r in near}
-    for r, s in _duplicates(omega, y_out, t1_out, Yt,
-                            lambda Ya, Yb: _doubles_dot(pieces, Ya, Yb), tol_omega):
-        drop = _duplicate_drop(r, s, converged)
-        keep = r + s - drop
-        warnings.warn(f'{label}: two roots landed on one root, at omega = '
-                      f'{omega[keep]:.8f} and {omega[drop]:.8f} Ha; the copy at '
-                      f'{omega[drop]:.8f} Ha marked unconverged, the root it missed '
-                      'is not recovered', RuntimeWarning, stacklevel=2)
-        converged[drop] = False
-    # the fold can reorder the seeds: a lower root of M may land above a higher
-    order = np.argsort(omega, kind='stable')
-    return FoldResult(omega[order], y_out[:, order], t1_out[order], steps[order],
-                      [loop[i] for i in order], converged[order], embed,
-                      level[order])
+            break
+        solve_seeds(lam[new], X[:, new], _levels(lam[new]))
+        mark_copies()
+    # the nroots lowest roots that are not copies, a level cut by nroots whole;
+    # roots solved past the cut are dropped
+    om = np.asarray(omega)
+    found = np.sort(om[~np.asarray(copy, bool)])
+    sel = np.flatnonzero(om <= found[min(nroots, found.size) - 1])
+    sel = sel[np.argsort(om[sel], kind='stable')]
+    return FoldResult(om[sel], np.column_stack(y_out)[:, sel],
+                      np.asarray(t1_out)[sel], np.asarray(steps, int)[sel],
+                      [loop[i] for i in sel], np.asarray(converged, bool)[sel],
+                      embed, np.asarray(level, int)[sel])

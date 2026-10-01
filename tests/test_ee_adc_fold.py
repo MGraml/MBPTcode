@@ -39,6 +39,11 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
   12. a collapsing distinct pair is reported, the kept root exact; a level split in
       A_eff warns and each root is a supermatrix eigenvalue; distinct roots cost the
       duplicate check no doubles image.
+  13. CH4 / 6-31G triplet, where the fold puts M's lowest state (A1) above the T2
+      triple: nroots = 1 returns the triple, equal to the full solve, on both
+      branches and without a warning; the collapsing pair of check 12 gets its
+      missed root back from the count check; a root above a doubles energy skips
+      the count with a warning.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -689,6 +694,11 @@ def check_collapsing_pair():
     ok &= check(abs(res.omega[k] - pair[0]) < 1e-10 and err < 1e-8,
                 'the kept root is the exact lower root, vector included',
                 f'|dw| {abs(res.omega[k] - pair[0]):.1e} Ha, 1-|y.u| {err:.1e}')
+    # the count check finds one root missing below the cut and seeds it
+    kept = np.sort(res.omega[res.converged])
+    d = abs(kept[-1] - pair[1]) if kept.size == 2 else np.inf
+    ok &= check(d < 1e-10, 'the count check recovers the missed upper root',
+                f'|dw| {d:.1e} Ha, converged {res.converged.tolist()}')
     return ok
 
 
@@ -765,6 +775,48 @@ def _sb_close(A, Bk, tol=1e-12):
                            atol=tol, rtol=0) for k in keys)
 
 
+def check_seeding_gap():
+    """CH4 / 6-31G triplet: M's lowest state folds above the T2 triple, so the
+    lowest root is seeded by the count check, not by M."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
+    ok = True
+    ev = HARTREE_TO_EV
+    mol = gto.M(atom=CH4, basis='6-31g', verbose=0)
+    mf = scf.RHF(mol).density_fit()
+    mf.conv_tol = 1e-12
+    mf.kernel()
+    eps = np.asarray(get_orbital_energies(mf, representation='spatial'), float)
+    B = DFIntegrals.from_scf(mol, mf).B_aa
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, mol.nelectron // 2,
+                                              level='adc2', pieces=True)
+    e_full, _ = solve_ee_adc(mf, level='adc2', nroots=4, df=True, spin='triplet',
+                             conv_tol=1e-10)
+    e_full = np.asarray(e_full)
+    for dense_limit, route in ((2000, 'dense'), (0, 'Davidson')):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            res = ee_fold.solve_folded(P, 1, spin='triplet', dense_limit=dense_limit,
+                                       tol_residual=1e-9)
+        d = np.abs(res.omega - e_full[:res.omega.size]) * ev
+        ok &= check(res.omega.size == 3 and float(d.max()) < 1e-5 and not caught,
+                    f'{route}: nroots = 1 returns the T2 triple of the full solve',
+                    f'nout {res.omega.size}, max |d| {d.max():.1e} eV, '
+                    f'{len(caught)} warning(s)')
+    # a doubles energy below the root: A_eff has a pole under it, so the count of
+    # roots below the cut does not hold and is skipped with a warning
+    m, C, D = np.array([0.5, 0.8, 1.1]), np.array([[0.05, 0.02, 0.0]]), [0.3]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res = ee_fold.solve_folded(_synthetic_pieces(m, C, D), 1, spin='singlet')
+    w, _ = _synthetic_exact(m, C, np.asarray(D))
+    pole = any('not checked' in str(x.message) for x in caught)
+    ok &= check(pole and abs(res.omega[0] - w[1]) < 1e-10,
+                'a root above a doubles energy: the count is skipped with a warning',
+                f'{len(caught)} warning(s), |dw| {abs(res.omega[0] - w[1]):.1e} Ha')
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water_df()
@@ -785,6 +837,7 @@ def main():
     all_ok &= check_duplicate_images(eps, B, no)
     all_ok &= check_level_crossing()
     all_ok &= check_eq53_transcription(eps, B, no)
+    all_ok &= check_seeding_gap()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
