@@ -56,6 +56,7 @@ _DEGENERATE = 1e-8      # Hartree: seeds spread by at most this are one level
 _SEED_RESIDUAL = 1e-9   # seeds of M: Ritz error |r|²/gap far below _DEGENERATE
 _DUPLICATE = 0.5        # full-vector overlap above which two roots are one
 _COUNT_ROUNDS = 3       # rounds of the count check before it warns
+_BLOCK_BYTES = 2 ** 31  # bytes a block's doubles images may take
 
 
 def singles_flat_to_sb(u, no, nv):
@@ -96,6 +97,15 @@ def _check_vector(u, n):
     return u.astype(float, copy=False)
 
 
+def _check_block(U, n):
+    U = np.asarray(U)
+    if np.iscomplexobj(U):
+        raise ValueError('the fold is real symmetric; a complex block was passed')
+    if U.shape[0] != n:
+        raise ValueError(f'singles block of {U.shape[0]} rows, expected {n}')
+    return U.astype(float, copy=False)
+
+
 def folded_operator(pieces, omega, spin=None):
     """A_eff(ω) on flat singles vectors, one spin channel or both.
 
@@ -109,7 +119,9 @@ def folded_operator(pieces, omega, spin=None):
         'Vt' (the reverse map), 'D' (ndarray, shape (no, no, nv, nv), index
         order (i, j, a, b), or, at level gw, shape (no, nv, nm), index order
         (k, c, m)), 'level', 'no', 'nv', 'be'; 'dnorm2' (optional: SB doubles
-        -> float sum_K Y_K², for a doubles layout other than adc2's).
+        -> float sum_K Y_K², for a doubles layout other than adc2's); 'block'
+        (optional int, default 1: columns the dense build hands 'V' and 'Vt' at
+        once, on a leading batch axis of their SB blocks).
     omega : float or None
         Frequency in Hartree; None gives the bare singles block M.
     spin : {'singlet', 'triplet', None}
@@ -118,7 +130,10 @@ def folded_operator(pieces, omega, spin=None):
     Returns
     -------
     matvec : callable
-        u (n,) -> A_eff(ω) u (n,), n = 2 no nv or the channel's size.
+        u (n,) -> A_eff(ω) u (n,), n = 2 no nv or the channel's size; a block
+        U (n, b), index order (row, column), -> A_eff(ω) U (n, b), every column
+        in one batched contraction (pieces 'V' and 'Vt' then see SB blocks with
+        a leading batch axis).
     dmatvec : callable
         u (n,) -> sum_K (sum_jb V_K,jb u_jb)² / (D_K - ω)² (a float), so that
         dλ/dω = -dmatvec(y) for a unit eigenvector y; 0.0 when omega is None.
@@ -151,8 +166,32 @@ def folded_operator(pieces, omega, spin=None):
                              np.einsum('iaia->ia', M.get('bbbb')).ravel()])
     diag_s = m_diag[reps]
     denom = None if omega is None else D - omega        # (D - ω), sign kept
+    nov = no * nv
+    basis = []
+
+    def channel_basis():
+        # E_pk = embed(e_k)_p, shape (n_full, n), so that restrict(v)_k = sum_p E_pk v_p
+        if not basis:
+            basis.append(np.column_stack([embed(e) for e in np.eye(n)]))
+        return basis[0]
+
+    def matmat(U):
+        # the columns x of U (n, b) at once, x riding as a leading batch axis
+        Ut = (U if spin is None else channel_basis() @ U).T
+        y1 = SB({'aa': Ut[:, :nov].reshape(-1, no, nv),
+                 'bb': Ut[:, nov:].reshape(-1, no, nv)})
+        w1 = be.ein('iajb,...jb->...ia', M, y1)           # sum_jb M_ia,jb y_xjb
+        if denom is not None:
+            # - sum_K V_K,ia (sum_jb V_K,jb y_xjb) / (D_K - ω)
+            Y = be.divide(V(y1), denom)
+            w1 = w1 - Vt(Y)
+        W = np.concatenate([w1.get('aa').reshape(-1, nov),
+                            w1.get('bb').reshape(-1, nov)], axis=1).T
+        return W if spin is None else channel_basis().T @ W
 
     def matvec(u):
+        if np.ndim(u) == 2:
+            return matmat(_check_block(u, n))
         u = _check_vector(u, n)
         y1 = singles_flat_to_sb(embed(u), no, nv)
         w1 = be.ein('iajb,jb->ia', M, y1)                 # sum_jb M_ia,jb y_jb
@@ -178,10 +217,23 @@ def folded_operator(pieces, omega, spin=None):
     return matvec, dmatvec, diag_s, embed, restrict
 
 
-def dense_effective(matvec, n):
-    """A_eff as an (n, n) array from n unit-vector matvecs, symmetrised."""
-    A = np.column_stack([matvec(np.eye(n)[:, k]) for k in range(n)])
+def dense_effective(matvec, n, block=1):
+    """A_eff as an (n, n) array from the unit vectors, `block` columns per matvec
+    call (block > 1 hands matvec an (n, block) slab of the identity), symmetrised."""
+    eye = np.eye(n)
+    if block <= 1:
+        A = np.column_stack([matvec(eye[:, k]) for k in range(n)])
+    else:
+        A = np.hstack([matvec(eye[:, s:s + block]) for s in range(0, n, block)])
     return 0.5 * (A + A.T)
+
+
+def _block_size(pieces, n):
+    """Columns per dense_effective call: at most pieces['block'] (1 when unset),
+    and few enough that the doubles images of a block with their temporaries,
+    taken as 16 arrays the size of D per column, fit in _BLOCK_BYTES."""
+    per_col = 16 * 8 * pieces['D'].size
+    return int(max(1, min(n, pieces.get('block', 1), _BLOCK_BYTES // per_col)))
 
 
 class FoldResult:
@@ -298,7 +350,7 @@ def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
     n = diag_s.size
     if dense:
         # sum_q A_pq v_qm = w_m v_pm, A built from n matvecs
-        A = dense_effective(matvec, n)
+        A = dense_effective(matvec, n, dense)
         w, v = np.linalg.eigh(A)
         if ref is None:
             lam, y = float(w[0]), v[:, 0]
@@ -361,7 +413,7 @@ def _eig_level(pieces, omega, spin, Y, dense, tol_residual, label):
     n, g = Y.shape
     if dense:
         # sum_q A_pq v_qm = w_m v_pm, A built from n matvecs
-        w, v = np.linalg.eigh(dense_effective(matvec, n))
+        w, v = np.linalg.eigh(dense_effective(matvec, n, dense))
         score = np.sum((Y.T @ v) ** 2, axis=0)    # sum_c (sum_p Y_pc v_pm)²
         k = np.sort(np.argsort(-score)[:g])
         lam, Z = w[k], v[:, k]
@@ -447,7 +499,7 @@ def _seed_levels(m0, diag_s, n, nroots, dense, tol_residual, label):
     so a level cut by nroots comes back whole."""
     if dense:
         # sum_q M_pq v_qr = w_r v_pr, M built from n matvecs
-        e, X = np.linalg.eigh(dense_effective(m0, n))
+        e, X = np.linalg.eigh(dense_effective(m0, n, dense))
         return e, X, [(a, b) for a, b in _levels(e) if a < nroots]
     extra = 2
     while True:
@@ -489,7 +541,7 @@ def _lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols, tol=Non
     k = min(k, n)
     if dense:
         # sum_q A_pq v_qm = w_m v_pm, A built from n matvecs
-        w, v = np.linalg.eigh(dense_effective(matvec, n))
+        w, v = np.linalg.eigh(dense_effective(matvec, n, dense))
     else:
         while True:
             # sum_q A_pq x_qm = w_m x_pm, the k lowest by Davidson
@@ -593,7 +645,8 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     tol_omega, tol_residual : float, Hartree and residual norm.
     t_min : float, singles weight below which the fixed-point loop takes over.
     max_newton, max_fixed : int, step budgets per root or level.
-    dense_limit : int, channel size at or below which A_eff is built and eigh'd.
+    dense_limit : int, channel size at or below which A_eff is built, in blocks of
+        columns (_block_size), and eigh'd.
     verbose : int, 1 prints one line per outer step.
 
     Returns
@@ -603,7 +656,8 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     _check_level(pieces)
     m0, _, diag_s, embed, _ = folded_operator(pieces, None, spin)
     n = diag_s.size
-    dense = n <= dense_limit
+    # columns per dense_effective call on the dense branch, 0 on the Davidson one
+    dense = _block_size(pieces, n) if n <= dense_limit else 0
     nroots = int(nroots)
     if nroots < 0:
         raise ValueError(f'nroots={nroots}; expected a count >= 0')

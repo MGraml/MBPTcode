@@ -48,6 +48,10 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
   14. the count's blind spots from the review of 38b97cc: a state M's diagonal
       ranks last but folded lowest, a missing branch mixed with a found root at
       the cut (25 points), and one count solve per call when nothing is missing.
+  15. a block of columns through folded_operator (adc2, gf2, gw; both channels and
+      spin None; omega None and 0.3 Ha), through the adc3 couplings at second order,
+      and through dense_effective in blocks of 3 and n equals the same columns one
+      at a time to 1e-12; the dense build blocks gw only.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -890,6 +894,62 @@ def check_index_solve(eps, B, no):
     return ok
 
 
+def check_batched(eps, B, no):
+    """A block of columns, index order (row, column), through the folded matvec,
+    the second-order couplings and dense_effective equals its columns one at a
+    time."""
+    from src.SingleReference.ADC.eeADC import ee_equations as _eq
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_gw_pieces import build_pieces_gw
+    ok = True
+    rng = np.random.default_rng(1)
+    pieces = {lv: ee_r_sigma_df.build_operator(eps, B, no, level=lv, pieces=True)[3]
+              for lv in ('adc2', 'gf2')}
+    pieces['gw'] = build_pieces_gw(eps, B, no, 'tda')
+    worst = 0.0
+    for P in pieces.values():
+        for spin in (None, 'singlet', 'triplet'):
+            for omega in (None, 0.3):
+                mv, _, diag_s, _, _ = ee_fold.folded_operator(P, omega, spin)
+                U = rng.standard_normal((diag_s.size, 3))
+                ref = np.column_stack([mv(U[:, j]) for j in range(3)])
+                worst = max(worst, float(np.abs(mv(U) - ref).max()))
+    ok &= check(worst < 1e-12, 'folded_operator on 3 columns at once equals them '
+                'one at a time (adc2, gf2, gw; None, singlet, triplet; omega None, '
+                '0.3 Ha)', f'max |diff| {worst:.1e}')
+    cache = ee_r_sigma.new_cache()
+    ee_r_sigma_df.build_operator(eps, B, no, level='adc3', cache=cache)
+    gb, amps, zint = cache['gb'], cache['amps'], cache['zint']
+    be, nv = _eq.SPIN_BLOCKED, len(eps) - no
+    y1 = SB({s: rng.standard_normal((3, no, nv)) for s in ('aa', 'bb')})
+    W = _eq.sigma_d_from_s(be, gb, amps, zint, y1, 2)
+    w = _eq.sigma_s_from_d(be, gb, amps, zint, W, 2)
+    dev = 0.0
+    for j in range(3):
+        Wj = _eq.sigma_d_from_s(be, gb, amps, zint,
+                                SB({s: y1.get(s)[j] for s in ('aa', 'bb')}), 2)
+        wj = _eq.sigma_s_from_d(be, gb, amps, zint, Wj, 2)
+        for X, Xj in ((W, Wj), (w, wj)):
+            dev = max([dev] + [float(np.abs(X.get(k)[j] - Xj.get(k)).max())
+                               for k in Xj.keys()])
+    ok &= check(dev < 1e-12, 'second-order couplings (A55, A42) on 3 columns at once '
+                'equal them one at a time', f'max |diff| {dev:.1e}')
+    dev = 0.0
+    for P in (pieces['adc2'], pieces['gw']):
+        mv, _, diag_s, _, _ = ee_fold.folded_operator(P, 0.3, 'singlet')
+        n = diag_s.size
+        A1 = ee_fold.dense_effective(mv, n, 1)
+        dev = max([dev] + [float(np.abs(ee_fold.dense_effective(mv, n, b) - A1).max())
+                           for b in (3, n)])
+    ok &= check(dev < 1e-12, 'dense_effective in blocks of 3 and of n equals the '
+                'one-column build (adc2, gw)', f'max |diff| {dev:.1e}')
+    sizes = {lv: ee_fold._block_size(P, n) for lv, P in pieces.items()}
+    ok &= check(sizes['adc2'] == sizes['gf2'] == 1 and sizes['gw'] > 1,
+                'the dense build takes adc2 and gf2 one column at a time, gw in '
+                'blocks', str(sizes))
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water_df()
@@ -912,6 +972,7 @@ def main():
     all_ok &= check_eq53_transcription(eps, B, no)
     all_ok &= check_seeding_gap()
     all_ok &= check_index_solve(eps, B, no)
+    all_ok &= check_batched(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 

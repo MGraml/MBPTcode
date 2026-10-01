@@ -256,37 +256,39 @@ def _dij(be, X_vv, eye_o):
 # ======================================================================
 
 def sigma_s_from_d(be, gb, amps, zint, Y, order):
-    """W^a_i(D) -- A41 (first order) and A42 (second)."""
+    """W^a_i(D) -- A41 (first order) and A42 (second). On the SPIN_BLOCKED
+    backend Y may carry leading batch axes (x...), kept on the result."""
     w = (_ovvv_ia(be, gb, Y)
-         + be.ein('jkib,jkab->ia', gb['ooov'], Y))
+         + be.ein('jkib,...jkab->...ia', gb['ooov'], Y))
     if order < 2:
         return w
     t1, ZA, ZB = amps['t2_1'], zint['ZA'], zint['ZB']
-    x_vv = be.ein('jkbd,jkbc->dc', t1, Y)
-    x_oo = be.ein('klbc,jlbc->kj', t1, Y)
-    return w + (-be.ein('jkib,jkab->ia', ZA, Y)
-                + be.ein('jabc,ijbc->ia', ZB, Y)
-                + be.ein('icad,dc->ia', gb['ovvv'], x_vv)
-                + be.ein('ikja,kj->ia', gb['ooov'], x_oo))
+    x_vv = be.ein('jkbd,...jkbc->...dc', t1, Y)
+    x_oo = be.ein('klbc,...jlbc->...kj', t1, Y)
+    return w + (-be.ein('jkib,...jkab->...ia', ZA, Y)
+                + be.ein('jabc,...ijbc->...ia', ZB, Y)
+                + be.ein('icad,...dc->...ia', gb['ovvv'], x_vv)
+                + be.ein('ikja,...kj->...ia', gb['ooov'], x_oo))
 
 
 def sigma_d_from_s(be, gb, amps, zint, y1, order, keys=None):
     """W^ab_ij(S) -- A54 (first order) and A55 (second). `keys`, a tuple of
-    spin strings, limits W to those blocks on the SPIN_BLOCKED backend."""
+    spin strings, limits W to those blocks on the SPIN_BLOCKED backend, where
+    y1 may also carry leading batch axes (x...), kept on the result."""
     # the factors -1/2 and 1/2 scale y1 (o*v) rather than the doubles (o^2 v^2)
     yh = 0.5 * y1
     ym = -yh
-    W = (_p_ab(be.ein('ijka,kb->ijab', gb['ooov'], ym), keys)
+    W = (_p_ab(be.ein('ijka,...kb->...ijab', gb['ooov'], ym), keys)
          + _p_ij(_ovvv_ijab(be, gb, ym), keys))
     if order < 2:
         return W
     t1, ZA, ZB = amps['t2_1'], zint['ZA'], zint['ZB']
-    u_vv = be.ein('kacd,kd->ac', gb['ovvv'], yh)
-    w_oo = be.ein('klic,lc->ki', gb['ooov'], yh)
-    W = W + _p_ab(be.ein('ijka,kb->ijab', ZA, yh)
-                  + be.ein('ijbc,ac->ijab', t1, u_vv), keys)
-    return W + _p_ij(be.ein('jcab,ic->ijab', ZB, yh)
-                     + be.ein('jkab,ki->ijab', t1, w_oo), keys)
+    u_vv = be.ein('kacd,...kd->...ac', gb['ovvv'], yh)
+    w_oo = be.ein('klic,...lc->...ki', gb['ooov'], yh)
+    W = W + _p_ab(be.ein('ijka,...kb->...ijab', ZA, yh)
+                  + be.ein('ijbc,...ac->...ijab', t1, u_vv), keys)
+    return W + _p_ij(be.ein('jcab,...ic->...ijab', ZB, yh)
+                     + be.ein('jkab,...ki->...ijab', t1, w_oo), keys)
 
 
 def sigma_d_from_d(be, gb, Y, d_ijab, order, vk=None, keys=None):
@@ -307,14 +309,14 @@ def _ovvv_ia(be, gb, X):
     its 'ovvv' block."""
     if 'ovvv_ajbc' in gb:
         return _sb.ovvv_ia(gb['ovvv_ajbc'], X)
-    return be.ein('jabc,ijbc->ia', gb['ovvv'], X)
+    return be.ein('jabc,...ijbc->...ia', gb['ovvv'], X)
 
 
 def _ovvv_ijab(be, gb, x):
     """sum_c <ic||ab> x_jc -> (i, j, a, b), routed as _ovvv_ia."""
     if 'ovvv_ajbc' in gb:
         return _sb.ovvv_ijab(gb['ovvv_ajbc'], x)
-    return be.ein('icab,jc->ijab', gb['ovvv'], x)
+    return be.ein('icab,...jc->...ijab', gb['ovvv'], x)
 
 
 def _p_ab(X, keys=None):
