@@ -121,7 +121,8 @@ def folded_operator(pieces, omega, spin=None):
         (k, c, m)), 'level', 'no', 'nv', 'be'; 'dnorm2' (optional: SB doubles
         -> float sum_K Y_K², for a doubles layout other than adc2's); 'block'
         (optional int, default 1: columns the dense build hands 'V' and 'Vt' at
-        once, on a leading batch axis of their SB blocks).
+        once, on a leading batch axis of their SB blocks); 'dense_limit' (optional
+        int, default 0: solve_folded's dense_limit when the caller passes None).
     omega : float or None
         Frequency in Hartree; None gives the bare singles block M.
     spin : {'singlet', 'triplet', None}
@@ -585,7 +586,7 @@ def _index_solve(pieces, spin, a, b, om, lo, hi, X, dense, tol_residual, tol_ome
 
 
 def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
-                 t_min=0.3, max_newton=12, max_fixed=30, dense_limit=2000,
+                 t_min=0.3, max_newton=12, max_fixed=30, dense_limit=None,
                  verbose=0):
     """The nroots lowest folded roots, each level at its own frequency.
 
@@ -645,8 +646,9 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     tol_omega, tol_residual : float, Hartree and residual norm.
     t_min : float, singles weight below which the fixed-point loop takes over.
     max_newton, max_fixed : int, step budgets per root or level.
-    dense_limit : int, channel size at or below which A_eff is built, in blocks of
-        columns (_block_size), and eigh'd.
+    dense_limit : int or None, channel size at or below which A_eff is built, in
+        blocks of columns (_block_size), and eigh'd; None takes
+        pieces['dense_limit'], 0 (Davidson at every size) when the pieces set none.
     verbose : int, 1 prints one line per outer step.
 
     Returns
@@ -656,6 +658,8 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     _check_level(pieces)
     m0, _, diag_s, embed, _ = folded_operator(pieces, None, spin)
     n = diag_s.size
+    if dense_limit is None:
+        dense_limit = pieces.get('dense_limit', 0)
     # columns per dense_effective call on the dense branch, 0 on the Davidson one
     dense = _block_size(pieces, n) if n <= dense_limit else 0
     nroots = int(nroots)

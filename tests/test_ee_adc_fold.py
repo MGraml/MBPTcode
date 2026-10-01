@@ -53,6 +53,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       and through dense_effective in blocks of 3 and n equals the same columns one
       at a time to 1e-12; the dense build blocks gw only; a complex block or one
       of the wrong row count raises ValueError.
+  16. dense_limit=None takes the pieces' own default: none at adc2 (Davidson), 40
+      at gw (dense on water/6-31G, n 40); an explicit value overrides.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -340,7 +342,7 @@ def check_routes_and_channels(mf, eps, B, no):
     ev = HARTREE_TO_EV
     _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
     for spin in ('singlet', 'triplet'):
-        a = ee_fold.solve_folded(P, 3, spin=spin)
+        a = ee_fold.solve_folded(P, 3, spin=spin, dense_limit=2000)
         b = ee_fold.solve_folded(P, 3, spin=spin, dense_limit=0)
         d = float(np.max(np.abs(a.omega - b.omega))) * ev
         ok &= check(d < 1e-7 and b.converged.all(),
@@ -660,8 +662,10 @@ def _synthetic_pieces(m, C, D):
     def dnorm2(Y):
         return float(sum(Y.get(s) @ Y.get(s) for s in ('aa', 'bb')))
 
+    # the dense branch unless a check passes dense_limit: these pieces are tiny
     return {'M': M, 'V': V, 'Vt': Vt, 'D': np.asarray(D, float), 'dnorm2': dnorm2,
-            'level': 'gw', 'no': 1, 'nv': nv, 'be': ee_equations.SPIN_BLOCKED}
+            'level': 'gw', 'no': 1, 'nv': nv, 'be': ee_equations.SPIN_BLOCKED,
+            'dense_limit': 2000}
 
 
 def _synthetic_exact(m, C, D):
@@ -961,6 +965,41 @@ def check_batched(eps, B, no):
     return ok
 
 
+def check_dense_default():
+    """dense_limit=None takes pieces['dense_limit']: adc2 declares none and runs
+    Davidson, gw declares 40 and builds A_eff densely on water/6-31G (n 40); an
+    explicit dense_limit overrides."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    from src.SingleReference.ADC.eeADC.ee_gw_pieces import build_pieces_gw
+    _, eps, B, no = water_df('6-31g')
+    P2 = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)[3]
+    Pg = build_pieces_gw(eps, B, no, 'tda')
+    calls = []
+    orig = ee_fold.dense_effective
+
+    def counted(*args):
+        calls.append(1)
+        return orig(*args)
+
+    ee_fold.dense_effective = counted
+    built = {}
+    try:
+        for tag, P, kw in (('adc2', P2, {}), ('gw', Pg, {}),
+                           ('adc2 at 2000', P2, {'dense_limit': 2000})):
+            calls.clear()
+            ee_fold.solve_folded(P, 3, spin='singlet', **kw)
+            built[tag] = len(calls)
+    finally:
+        ee_fold.dense_effective = orig
+    ok = check('dense_limit' not in P2 and Pg.get('dense_limit') == 40,
+               "pieces['dense_limit']: unset at adc2, 40 at gw",
+               str(Pg.get('dense_limit')))
+    ok &= check(built['adc2'] == 0 and built['gw'] > 0 and built['adc2 at 2000'] > 0,
+                'dense_limit=None: adc2 runs Davidson, gw (n 40) builds A_eff, an '
+                'explicit 2000 builds it at adc2', str(built))
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water_df()
@@ -984,6 +1023,7 @@ def main():
     all_ok &= check_seeding_gap()
     all_ok &= check_index_solve(eps, B, no)
     all_ok &= check_batched(eps, B, no)
+    all_ok &= check_dense_default()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 

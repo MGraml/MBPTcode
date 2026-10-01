@@ -126,8 +126,9 @@ def build_pieces_gw(eps, B, nocc, screening='tda'):
         index order (k, c, m); 'Vt' the transpose; 'D' ndarray, shape (no, nv, nm),
         index order (k, c, m); 'dnorm2' SB doubles -> sum of the squares over both
         blocks; 'level' 'gw'; 'no', 'nv', 'be'; 'block' 16, the dense build's
-        columns per call ('V' and 'Vt' take a leading batch axis); 'omega' (nm,)
-        and 'W' (norb, norb, nm) for inspection.
+        columns per call ('V' and 'Vt' take a leading batch axis); 'dense_limit'
+        40, solve_folded's default; 'omega' (nm,) and 'W' (norb, norb, nm) for
+        inspection.
     """
     if screening not in ('tda', 'rpa'):
         raise ValueError(f"screening={screening!r}; expected 'tda' or 'rpa'")
@@ -163,7 +164,8 @@ def build_pieces_gw(eps, B, nocc, screening='tda'):
     def dnorm2(Y):
         return float(sum(np.vdot(Y.get(s), Y.get(s)) for s in ('aa', 'bb')))
 
-    # couple and couple_t are contractions that a block of columns speeds up
+    # couple and couple_t are contractions that a block of columns speeds up, and
+    # with it the dense build outruns Davidson up to a channel of about 40
     return {'M': M, 'V': V, 'Vt': Vt, 'D': D, 'dnorm2': dnorm2, 'level': 'gw',
-            'no': no, 'nv': nv, 'be': _eq.SPIN_BLOCKED, 'block': 16, 'omega': omega,
-            'W': W}
+            'no': no, 'nv': nv, 'be': _eq.SPIN_BLOCKED, 'block': 16,
+            'dense_limit': 40, 'omega': omega, 'W': W}

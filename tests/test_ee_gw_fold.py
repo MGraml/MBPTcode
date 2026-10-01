@@ -134,7 +134,7 @@ def check_davidson_branch(eps, B, no):
     P = ee_gw_pieces.build_pieces_gw(eps, B, no, screening='tda')
     for spin in ('singlet', 'triplet'):
         kw = dict(spin=spin, tol_omega=1e-10, tol_residual=1e-9)
-        a = ee_fold.solve_folded(P, 3, **kw)
+        a = ee_fold.solve_folded(P, 3, dense_limit=2000, **kw)
         b = ee_fold.solve_folded(P, 3, dense_limit=0, **kw)
         dw = float(np.max(np.abs(a.omega[:3] - b.omega[:3])))
         dt = float(np.max(np.abs(a.t1[:3] - b.t1[:3])))

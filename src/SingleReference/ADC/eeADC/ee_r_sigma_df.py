@@ -216,7 +216,8 @@ def build_operator(eps, B, nocc_spatial, level='adc3', en_dress=None,
     to an SB doubles vector (blocks (no, no, nv, nv), index order
     (i, j, a, b)), Vt its transpose W^a_i(D) the other way, both also over a
     leading batch axis of vectors (no 'block' key: the dense build gains
-    nothing from batching these couplings), D = d_ijab the
+    nothing from batching these couplings; no 'dense_limit' key: solve_folded
+    runs Davidson on them at every size), D = d_ijab the
     doubles diagonal, shape (no, no, nv, nv), index order (i, j, a, b). Only a
     level whose doubles block is that bare diagonal (o_dd = 0: adc2, gf2) is
     accepted, and only without `parity`: the fold takes its spin channel on the
