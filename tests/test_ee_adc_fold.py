@@ -51,7 +51,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
   15. a block of columns through folded_operator (adc2, gf2, gw; both channels and
       spin None; omega None and 0.3 Ha), through the adc3 couplings at second order,
       and through dense_effective in blocks of 3 and n equals the same columns one
-      at a time to 1e-12; the dense build blocks gw only.
+      at a time to 1e-12; the dense build blocks gw only; a complex block or one
+      of the wrong row count raises ValueError.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -943,6 +944,16 @@ def check_batched(eps, B, no):
                            for b in (3, n)])
     ok &= check(dev < 1e-12, 'dense_effective in blocks of 3 and of n equals the '
                 'one-column build (adc2, gw)', f'max |diff| {dev:.1e}')
+    mv, _, diag_s, _, _ = ee_fold.folded_operator(pieces['adc2'], 0.3, 'singlet')
+    raised = []
+    for bad in (np.ones((diag_s.size, 2), complex), np.ones((diag_s.size + 1, 2))):
+        try:
+            mv(bad)
+            raised.append(False)
+        except ValueError:
+            raised.append(True)
+    ok &= check(all(raised), 'a complex block and a block of the wrong row count '
+                'raise ValueError', str(raised))
     sizes = {lv: ee_fold._block_size(P, n) for lv, P in pieces.items()}
     ok &= check(sizes['adc2'] == sizes['gf2'] == 1 and sizes['gw'] > 1,
                 'the dense build takes adc2 and gf2 one column at a time, gw in '
