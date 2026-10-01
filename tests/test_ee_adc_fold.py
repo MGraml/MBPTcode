@@ -41,9 +41,13 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       duplicate check no doubles image.
   13. CH4 / 6-31G triplet, where the fold puts M's lowest state (A1) above the T2
       triple: nroots = 1 returns the triple, equal to the full solve, on both
-      branches and without a warning; the collapsing pair of check 12 gets its
-      missed root back from the count check; a root above a doubles energy skips
-      the count with a warning.
+      branches and without a warning; a root above a doubles energy skips the
+      count with a warning. Check 12's collapsing pair drops its copy and gets the
+      missed root back by branch index, on the Davidson branch too at tol_omega
+      far below tol_residual.
+  14. the count's blind spots from the review of 38b97cc: a state M's diagonal
+      ranks last but folded lowest, a missing branch mixed with a found root at
+      the cut (25 points), and one count solve per call when nothing is missing.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -630,14 +634,15 @@ def check_level_helpers():
 
 
 def _synthetic_pieces(m, C, D):
-    """Fold pieces with no = 1, nv = len(m): M = diag(m) on both spin blocks, no
-    cross-spin block; V = C (doubles x singles) per spin block; D the doubles
-    diagonal; level 'gw' with its plain doubles norm. In the singlet channel the
-    supermatrix is [[diag(m), C^T], [C, diag(D)]]."""
+    """Fold pieces with no = 1, nv = len(m): M = diag(m) (or m itself, when m is a
+    symmetric matrix) on both spin blocks, no cross-spin block; V = C (doubles x
+    singles) per spin block; D the doubles diagonal; level 'gw' with its plain
+    doubles norm. In the singlet channel the supermatrix is
+    [[diag(m), C^T], [C, diag(D)]]."""
     from src.SingleReference.ADC.eeADC import ee_equations
     nv = len(m)
     Ma = np.zeros((1, nv, 1, nv))
-    Ma[0, :, 0, :] = np.diag(m)
+    Ma[0, :, 0, :] = np.diag(m) if np.ndim(m) == 1 else m
     M = SB({'aaaa': Ma, 'bbbb': Ma.copy(), 'aabb': np.zeros_like(Ma),
             'bbaa': np.zeros_like(Ma)})
 
@@ -658,7 +663,7 @@ def _synthetic_exact(m, C, D):
     """Eigenpairs (w, v) of the singlet-channel supermatrix of _synthetic_pieces."""
     ns, nd = len(m), len(D)
     H = np.zeros((ns + nd, ns + nd))
-    H[:ns, :ns] = np.diag(m)
+    H[:ns, :ns] = np.diag(m) if np.ndim(m) == 1 else m
     H[ns:, :ns] = C
     H[:ns, ns:] = C.T
     H[ns:, ns:] = np.diag(D)
@@ -668,7 +673,10 @@ def _synthetic_exact(m, C, D):
 def check_collapsing_pair():
     """A distinct pair 7.05e-7 Ha apart whose seeds lie 0.22 Ha apart in M (the probe
     developments/ee_gw_fold/probe_lowdin_pair_2026-09-30): both seeds converge onto
-    the lower root. The fold reports the duplicate and keeps one exact root."""
+    the lower root. The fold reports the duplicate, drops the copy, keeps one exact
+    root and solves the missed one by its branch index (one root short of
+    nroots); on the Davidson branch with tol_omega far below tol_residual (the
+    plan-2 M-1 setting) the duplicate window tied to tol_residual catches it."""
     from src.SingleReference.ADC.eeADC import ee_fold
     ok = True
     D = np.array([1.0, 1.4])
@@ -685,20 +693,28 @@ def check_collapsing_pair():
         warnings.simplefilter('always')
         res = ee_fold.solve_folded(P, 2, spin='singlet', tol_omega=1e-12)
     dup = any('landed on one root' in str(x.message) for x in caught)
-    ok &= check(dup and int(np.sum(~res.converged)) == 1,
-                'the collapse is reported: a warning, one root unconverged',
-                f'converged {res.converged.tolist()}')
-    k = int(np.flatnonzero(res.converged)[0]) if res.converged.any() else 0
-    u = v[:3, int(np.argmin(np.abs(w - res.omega[k])))]
-    err = 1.0 - abs(float(u @ res.y[:, k])) / np.linalg.norm(u)
-    ok &= check(abs(res.omega[k] - pair[0]) < 1e-10 and err < 1e-8,
+    ok &= check(dup and res.omega.size == 2 and bool(res.converged.all()),
+                'the collapse is reported: a warning, the copy dropped',
+                f'nout {res.omega.size}, converged {res.converged.tolist()}')
+    u = v[:3, int(np.argmin(np.abs(w - res.omega[0])))]
+    err = 1.0 - abs(float(u @ res.y[:, 0])) / np.linalg.norm(u)
+    ok &= check(abs(res.omega[0] - pair[0]) < 1e-10 and err < 1e-8,
                 'the kept root is the exact lower root, vector included',
-                f'|dw| {abs(res.omega[k] - pair[0]):.1e} Ha, 1-|y.u| {err:.1e}')
-    # the count check finds one root missing below the cut and seeds it
-    kept = np.sort(res.omega[res.converged])
-    d = abs(kept[-1] - pair[1]) if kept.size == 2 else np.inf
-    ok &= check(d < 1e-10, 'the count check recovers the missed upper root',
-                f'|dw| {d:.1e} Ha, converged {res.converged.tolist()}')
+                f'|dw| {abs(res.omega[0] - pair[0]):.1e} Ha, 1-|y.u| {err:.1e}')
+    # one root short of nroots: the second branch is solved by its index
+    d = abs(res.omega[-1] - pair[1])
+    ok &= check(d < 1e-10 and res.loop[-1] == 'index',
+                'the missed upper root is solved by its branch index',
+                f'|dw| {d:.1e} Ha, loop {res.loop}')
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res = ee_fold.solve_folded(P, 2, spin='singlet', tol_omega=1e-12,
+                                   dense_limit=0)
+    dup = any('landed on one root' in str(x.message) for x in caught)
+    d = np.abs(res.omega - pair).max() if res.omega.size == 2 else np.inf
+    ok &= check(dup and d < 1e-8,
+                'Davidson, tol_omega 1e-12 at tol_residual 1e-6: the collapse is '
+                'caught and both roots come back', f'max |dw| {d:.1e} Ha')
     return ok
 
 
@@ -817,6 +833,63 @@ def check_seeding_gap():
     return ok
 
 
+def check_index_solve(eps, B, no):
+    """The count's blind spots, found by the review of 38b97cc
+    (developments/ee_gw_fold/review_seedfix_2026-10-01): a state M's diagonal
+    ranks last, folded to the bottom (I1); a missing branch mixed 30 to 60 degrees
+    with a found root at the cut (I4, the reviewer's 25-point scan); and one count
+    solve per call on water when nothing is missing (I3)."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    m = 0.5 + 0.02 * np.arange(12)
+    m[11] = 1.0
+    C = np.zeros((1, 12))
+    C[0, 11] = 0.7
+    w, _ = _synthetic_exact(m, C, np.array([1.2]))
+    for dense_limit, route in ((2000, 'dense'), (0, 'Davidson')):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            res = ee_fold.solve_folded(_synthetic_pieces(m, C, [1.2]), 1,
+                                       spin='singlet', dense_limit=dense_limit,
+                                       tol_omega=1e-10)
+        d = abs(res.omega[0] - w[0])
+        ok &= check(d < 1e-9 and not caught,
+                    f'{route}: a state last on M diagonal, folded lowest, is found',
+                    f'|dw| {d:.1e} Ha, {len(caught)} warning(s)')
+    worst, bad = 0.0, 0
+    for t in (0.005, 0.01, 0.02, 0.04, 0.08):
+        for delta in (-0.03, -0.015, 0.0, 0.015, 0.03):
+            Mf = np.array([[0.50, 0.0, t], [0.0, 0.60, 0.0], [t, 0.0, 0.90]])
+            Cq = np.array([[0.0, 0.0, np.sqrt((0.4 - delta) * 0.4)]])
+            w, _ = _synthetic_exact(Mf, Cq, np.array([1.0]))
+            for dense_limit in (2000, 0):
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter('always')
+                    res = ee_fold.solve_folded(_synthetic_pieces(Mf, Cq, [1.0]), 2,
+                                               spin='singlet', tol_omega=1e-10,
+                                               dense_limit=dense_limit)
+                d = np.abs(res.omega[:2] - w[:2]).max() if res.omega.size >= 2 \
+                    else np.inf
+                worst, bad = max(worst, d), bad + int(d >= 1e-8 or bool(caught))
+    ok &= check(bad == 0, 'mixed at the cut: 25 points x 2 branches, the two '
+                'lowest roots exact', f'{bad} bad, max |dw| {worst:.1e} Ha')
+    _, _, _, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)
+    calls, solve = [], ee_fold.solve_symmetric
+
+    def counted(*a, **k):
+        calls.append(k.get('label', ''))
+        return solve(*a, **k)
+    ee_fold.solve_symmetric = counted
+    try:
+        ee_fold.solve_folded(P, 3, spin='singlet', dense_limit=0)
+    finally:
+        ee_fold.solve_symmetric = solve
+    n_count = sum(c.endswith(' count') for c in calls)
+    ok &= check(n_count == 1, 'water, nothing missing: one count solve',
+                f'{n_count} count solve(s)')
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water_df()
@@ -838,6 +911,7 @@ def main():
     all_ok &= check_level_crossing()
     all_ok &= check_eq53_transcription(eps, B, no)
     all_ok &= check_seeding_gap()
+    all_ok &= check_index_solve(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
