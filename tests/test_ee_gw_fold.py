@@ -19,6 +19,10 @@ Checks, water (RHF, DF factors), basis per check:
   6. QuAcK's RGW_phBSE_upfolded_sym on H2O/cc-pVDZ at QuAcK's geometry, four-index
      HF, exact factors: S1, T1 and their 1h1p weight, TDA_W on and off, to 1e-5 eV and
      1e-5 (runs 2026-09-25_quack-xcheck-h2o and 2026-09-30_quack-xcheck-h2o-upf-rpaw).
+  7. H2CO / STO-3G, TDA screening, where the fold reorders the seeds of M past
+     nroots: the singlet's 3 and the triplet's 4 lowest roots equal the lowest
+     eigenvalues of check 4's supermatrix below min D, on both branches, to 1e-9 Ha,
+     without a warning.
 
 Run: python tests/test_ee_gw_fold.py
 """
@@ -307,6 +311,41 @@ def check_quack_h2o():
     return ok
 
 
+H2CO = 'C 0 0 0; O 0 0 1.205; H 0 0.943 -0.587; H 0 -0.943 -0.587'
+
+
+def check_seeding_gap():
+    """H2CO / STO-3G, TDA screening: the fold pulls a state of M from above its
+    seeds below them (singlet at nroots 3, triplet at nroots 4), so the lowest roots
+    come from the count check; they equal the lowest eigenvalues of the channel's
+    QuAcK-form supermatrix below min D."""
+    ok = True
+    mol = gto.M(atom=H2CO, basis='sto-3g', verbose=0)
+    mf = scf.RHF(mol).density_fit()
+    mf.conv_tol = 1e-12
+    mf.kernel()
+    eps = np.asarray(get_orbital_energies(mf, representation='spatial'), float)
+    B = DFIntegrals.from_scf(mol, mf).B_aa
+    no = mol.nelectron // 2
+    P = ee_gw_pieces.build_pieces_gw(eps, B, no, screening='tda')
+    dmin = float(np.min(P['D']))
+    for spin, k in (('singlet', 3), ('triplet', 4)):
+        w = np.linalg.eigvalsh(quack_supermatrix(eps, B, no, spin, 'tda'))
+        w = w[w < dmin][:k]
+        for dense_limit, route in ((2000, 'dense'), (0, 'Davidson')):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                res = ee_fold.solve_folded(P, k, spin=spin, tol_omega=1e-10,
+                                           tol_residual=1e-9, dense_limit=dense_limit)
+            d = float(np.max(np.abs(res.omega[:k] - w))) if res.omega.size >= k \
+                else np.inf
+            ok &= check(d < 1e-9 and not caught,
+                        f'{route} {spin}: the {k} lowest roots equal the supermatrix',
+                        f'max |dw| {d:.1e} Ha, nout {res.omega.size}, '
+                        f'{len(caught)} warning(s)')
+    return ok
+
+
 def main():
     all_ok = True
     mf, eps, B, no = water('6-31g')
@@ -317,6 +356,7 @@ def main():
     all_ok &= check_bintrim_berkelbach()
     all_ok &= check_quack_h2o()
     all_ok &= check_boundaries(eps, B, no)
+    all_ok &= check_seeding_gap()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
