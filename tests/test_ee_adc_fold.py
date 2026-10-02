@@ -56,6 +56,10 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       of the wrong row count raises ValueError.
   16. dense_limit=None takes the pieces' own default: none at adc2 (Davidson), 40
       at gw (dense on water/6-31G, n 40); an explicit value overrides.
+  17. the count's window: a level split by 2e-9 Ha at the cut, tol_omega 1e-10,
+      counts whole, so a state folded below it is found and none warns; a
+      distinct partner 1e-7 or 1e-6 Ha above the cut, not asked for, costs no
+      warning and one count, widened once, at default tolerances.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -900,6 +904,60 @@ def check_index_solve(eps, B, no):
     return ok
 
 
+def check_count_window():
+    """The count's window against a level and against an unrequested partner: a
+    pair of M split by 2e-9 Ha (one level, solved at its mean) is the cut at
+    tol_omega 1e-10, with and without a state that folds below it; a distinct
+    partner 1e-7 or 1e-6 Ha above the cut, not asked for, at default tolerances:
+    the partner lies in the window, so the count's Davidson widens once past it."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    m, D = np.array([0.5, 0.5 + 2e-9, 0.9, 1.5]), np.array([1.6])
+    for hidden in (True, False):
+        C = np.array([[0.0, 0.0, 0.0, 1.149 if hidden else 0.0]])
+        w, _ = _synthetic_exact(m, C, D)
+        nw = 3 if hidden else 2
+        for dense_limit, route in ((2000, 'dense'), (0, 'Davidson')):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                res = ee_fold.solve_folded(_synthetic_pieces(m, C, D), 2,
+                                           spin='singlet', tol_omega=1e-10,
+                                           dense_limit=dense_limit)
+            d = np.abs(res.omega - w[:nw]).max() if res.omega.size == nw else np.inf
+            what = 'a state folded below it is found' if hidden else 'none warns'
+            ok &= check(d < 2e-9 and not caught,
+                        f'{route}: a level split by 2e-9 Ha at the cut, tol_omega '
+                        f'1e-10, counts whole; {what}',
+                        f'nout {res.omega.size}, max |dw| {d:.1e} Ha, '
+                        f'{len(caught)} warning(s)')
+    calls, solve = [], ee_fold.solve_symmetric
+
+    def counted(*a, **k):
+        calls.append(k.get('label', ''))
+        return solve(*a, **k)
+    ee_fold.solve_symmetric = counted
+    try:
+        for delta in (1e-7, 1e-6):
+            m = np.array([0.5, 0.5 + delta, 0.7, 1.5])
+            C = np.array([[0.0, 0.0, 0.0, 0.3]])
+            for dense_limit, route in ((2000, 'dense'), (0, 'Davidson')):
+                calls.clear()
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter('always')
+                    res = ee_fold.solve_folded(_synthetic_pieces(m, C, D), 1,
+                                               spin='singlet', dense_limit=dense_limit)
+                n_count = sum(c.endswith(' count') for c in calls)
+                ok &= check(res.omega.size == 1 and abs(res.omega[0] - 0.5) < 1e-9
+                            and not caught and n_count <= 2,
+                            f'{route}: a partner {delta:.0e} Ha above the cut, not '
+                            'asked for, costs no warning and one count (widened once)',
+                            f'omega {res.omega}, {len(caught)} warning(s), '
+                            f'{n_count} count solve(s)')
+    finally:
+        ee_fold.solve_symmetric = solve
+    return ok
+
+
 def check_batched(eps, B, no):
     """A block of columns, index order (row, column), through the folded matvec,
     the second-order couplings and dense_effective equals its columns one at a
@@ -1058,6 +1116,7 @@ def main():
     all_ok &= check_seeding_gap()
     all_ok &= check_index_solve(eps, B, no)
     all_ok &= check_index_bracket()
+    all_ok &= check_count_window()
     all_ok &= check_batched(eps, B, no)
     all_ok &= check_dense_default()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')

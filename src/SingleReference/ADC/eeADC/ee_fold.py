@@ -621,11 +621,13 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     the lowest, falls with ω (dλ/dω ≤ 0), so λ_j(ω) = ω has one root ω_j, and
     ω_1 ≤ ω_2 ≤ ...: the folded roots at or below ω number the λ_j(ω) ≤ ω, and
     the nroots lowest roots are those of branches 1 to nroots. The fold can
-    reorder the seeds of M, so at ω_c, the nroots-th lowest root found, that
-    number is compared with the roots found (in the window 2 tol_omega T1). When
-    roots are missing, or fewer than nroots were found, each root found gets its
-    branch index from the same count at its own ω, and every branch up to nroots
-    that no root covers is solved by its index: Newton on λ_j(ω) - ω inside the
+    reorder the seeds of M, so at ω_c, the nroots-th lowest root found, the
+    branches below the window max(2 tol_omega, 1e-8 Ha) T1 around ω_c are
+    compared with the roots found there; a branch inside the window is
+    degenerate with ω_c to that resolution. When roots are missing, or fewer
+    than nroots were found, each root found gets its branch index from the
+    branches below its own window, and every branch up to nroots that no root
+    covers is solved by its index: Newton on λ_j(ω) - ω inside the
     bracket between λ_j(ω_c) and ω_c, bisection when a step leaves it, a group of
     branches degenerate at ω_c at one ω (loop 'index'). At most 3 rounds, then a
     RuntimeWarning names the count; one also warns when more roots are found below
@@ -765,11 +767,14 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
                       key=lambda r: omega[r])
 
     def count_below(om, k, cols):
-        """(N, λ, X, dmatvec): N the branches of A_eff(om) with λ_j(om) ≤ om + tol,
-        their roots at or below om; λ, X the lowest eigenpairs, at least k."""
+        """(N_lo, N, λ, X, dmatvec): N_lo the branches of A_eff(om) with
+        λ_j(om) < om - tol, their roots below om's window; N those with
+        λ_j(om) ≤ om + tol, their roots at or below om; λ, X the lowest
+        eigenpairs, at least k."""
         lam, X, dmv = _lowest_at(pieces, om, spin, k, dense, tol_residual, label,
                                  cols, tol)
-        return int(np.count_nonzero(lam <= om + tol)), lam, X, dmv
+        return (int(np.count_nonzero(lam < om - tol)),
+                int(np.count_nonzero(lam <= om + tol)), lam, X, dmv)
 
     def solve_index(a, b, lam_c, X_c, dmv_c, cut):
         """Solve branches a..b-1 (0-based) by index from their eigenpairs at the
@@ -808,8 +813,10 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     mark_copies()
     # the count check: below min_K D_K the folded roots at or below ω number the
     # eigenvalues λ_j(ω) ≤ ω of A_eff(ω), and the j-th lowest root is the root
-    # of the j-th branch; a branch no root found covers is solved by its index
-    tol = 2.0 * tol_omega
+    # of the j-th branch; a branch no root found covers is solved by its index.
+    # A level spreads by up to _DEGENERATE and is solved at its mean, so the
+    # window holds that spread too
+    tol = max(2.0 * tol_omega, _DEGENERATE)
     d_min = float(np.min(pieces['D']))
     for rnd in range(_COUNT_ROUNDS + 1):
         L = live()
@@ -823,31 +830,34 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
                           f'doubles energy {d_min:.8f} Ha; the count of roots below '
                           f'it is not checked{short}', RuntimeWarning, stacklevel=2)
             break
-        # λ_j(ω_c) ≤ ω_c + tol holds for a branch whose root lies up to about
-        # tol T1_j above ω_c: count the found roots in the same window
+        # λ_j(ω_c) - ω_c ≈ (ω_j - ω_c) / T1_j: a branch whose root lies within
+        # tol T1_j of ω_c falls in the window; count the found roots the same way
+        nf_lo = int(np.count_nonzero(found < cut - tol * t1f))
         nf = int(np.count_nonzero(found <= cut + tol * t1f))
         Yl = np.column_stack([y_out[r] for r in L])
-        nb, lam, X, dmv = count_below(cut, max(nroots, nf + 1), Yl)
+        nb_lo, nb, lam, X, dmv = count_below(cut, max(nroots, nf + 1), Yl)
         if nf > nb:
             warnings.warn(f'{label}: {nf} roots found at or below omega = {cut:.8f} '
                           f'Ha where A_eff has {nb}: a copy inside the duplicate '
                           'window, or an unconverged root', RuntimeWarning,
                           stacklevel=2)
-        if nb <= nf and not deficit:
+        # a branch inside the cut's window is degenerate with the cut root to the
+        # window's resolution: missing only when roots are short of nroots
+        if nb_lo <= nf_lo and not deficit:
             break
-        # the branch index of each found root: the count at its own ω, a group of
-        # roots within tol taking the top of its count
+        # the branch index of each found root: the branches below its window, a
+        # group of roots within tol taking the next ones
         covered, a = set(), 0
         while a < found.size and found[a] <= cut + tol * t1f[a]:
             b = a + 1
             while b < found.size and found[b] - found[a] <= tol:
                 b += 1
-            c = count_below(float(found[b - 1]), b + 1, Yl[:, :b])[0]
-            covered.update(range(c - (b - a), c))
+            c = count_below(float(found[a]), b + 1, Yl[:, :b])[0]
+            covered.update(range(c, c + b - a))
             a = b
         missing = [j for j in range(nroots) if j not in covered]
         if rnd == _COUNT_ROUNDS or not missing:
-            warnings.warn(f'{label}: {len(missing) or nb - nf + deficit} of the '
+            warnings.warn(f'{label}: {len(missing) or nb_lo - nf_lo + deficit} of the '
                           f'{nroots} lowest roots not found after {rnd} round(s)',
                           RuntimeWarning, stacklevel=2)
             break
