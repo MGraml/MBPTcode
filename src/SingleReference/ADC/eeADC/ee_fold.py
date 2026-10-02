@@ -569,13 +569,15 @@ def _lowest_beside(matvec, diag_s, V, w0, top, tol_residual, label):
     return float(mu[0]), np.asarray(z, float)[:, 0]
 
 
-def _lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols, tol=None):
+def _lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols, tol=None,
+               check=False):
     """The k lowest eigenpairs of A_eff(ω), λ (m,) ascending and X (n, m), and
     dmatvec at ω; with tol also every one with λ_j ≤ ω + tol (m ≥ k). Davidson
     starts from cols (n, c), vectors expected near that span, padded by _guess;
     with tol it widens from its own Ritz vectors until the highest returned lies
-    above ω + tol, and a check off their span (_lowest_beside) then looks for an
-    eigenvalue at or below ω + tol the start hid, which joins the next start."""
+    above ω + tol, and with check a search off their span (_lowest_beside) then
+    looks for an eigenvalue at or below ω + tol the start hid, which joins the
+    next start."""
     matvec, dmatvec, diag_s, _, _ = folded_operator(pieces, omega, spin)
     n = diag_s.size
     k = min(k, n)
@@ -595,6 +597,8 @@ def _lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols, tol=Non
             if w[-1] <= omega + tol:
                 cols, k = v, min(2 * k, n)
                 continue
+            if not check:
+                break
             # a start whose vectors are exact eigenvectors converges at once
             # and can hide a branch below ω + tol: look for one off span v
             mu, z = _lowest_beside(matvec, diag_s, v, float(w[0]), omega + tol,
@@ -684,10 +688,11 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     checked, with a RuntimeWarning. Roots solved past the cut are dropped. The
     Davidson solves of the count start from the roots found, one random vector
     and M's lowest diagonal entries; where those are exact eigenvectors of A_eff
-    the solve converges at once and can hide a branch, so a second Davidson,
-    from the random vector alone and off the span of the count's vectors, looks
-    for an eigenvalue in the window or below it, and one it finds joins the
-    count's start.
+    the solve converges at once and can hide a branch, so at the first cut, the
+    highest, a second Davidson, from the random vector alone and off the span
+    of the count's vectors, looks for an eigenvalue in the window or below it;
+    one it finds joins the count's start, and the count's vectors join the
+    start of every per-root count.
 
     Limits: the vectors of two distinct roots split by δ are determined to about
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
@@ -819,13 +824,13 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         return sorted((r for r in range(len(omega)) if not copy[r]),
                       key=lambda r: omega[r])
 
-    def count_below(om, k, cols):
+    def count_below(om, k, cols, check=False):
         """(N_lo, N, λ, X, dmatvec): N_lo the branches of A_eff(om) with
         λ_j(om) < om - tol, their roots below om's window; N those with
         λ_j(om) ≤ om + tol, their roots at or below om; λ, X the lowest
-        eigenpairs, at least k."""
+        eigenpairs, at least k; check searches off the count's span."""
         lam, X, dmv = _lowest_at(pieces, om, spin, k, dense, tol_residual, label,
-                                 cols, tol)
+                                 cols, tol, check)
         return (int(np.count_nonzero(lam < om - tol)),
                 int(np.count_nonzero(lam <= om + tol)), lam, X, dmv)
 
@@ -888,7 +893,10 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         nf_lo = int(np.count_nonzero(found < cut - tol * t1f))
         nf = int(np.count_nonzero(found <= cut + tol * t1f))
         Yl = np.column_stack([y_out[r] for r in L])
-        nb_lo, nb, lam, X, dmv = count_below(cut, max(nroots, nf + 1), Yl)
+        # the first cut is the highest: a branch below a later cut lies below it,
+        # and one the search finds there is solved and joins every later start
+        nb_lo, nb, lam, X, dmv = count_below(cut, max(nroots, nf + 1), Yl,
+                                             check=rnd == 0)
         if nf > nb:
             warnings.warn(f'{label}: {nf} roots found at or below omega = {cut:.8f} '
                           f'Ha where A_eff has {nb}: a copy inside the duplicate '
@@ -905,7 +913,9 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
             b = a + 1
             while b < found.size and found[b] - found[a] <= tol:
                 b += 1
-            c = count_below(float(found[a]), b + 1, Yl[:, :b])[0]
+            # the cut's eigenvectors in the start carry what its search found
+            c = count_below(float(found[a]), b + 1,
+                            np.column_stack([Yl[:, :b], X]))[0]
             covered.update(range(c, c + b - a))
             a = b
         missing = [j for j in range(nroots) if j not in covered]

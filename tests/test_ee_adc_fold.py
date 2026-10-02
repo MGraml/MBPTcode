@@ -982,21 +982,34 @@ def check_hidden_branch():
     Cb = np.zeros((1, n))
     Cb[0, na:] = rng.standard_normal(nb)
     Cb *= 2.2 / np.linalg.norm(Cb)
-    for tag, mm, CC, DD in (('diagonal', m, C, D), ('coupled block', Mf, Cb, [2.2])):
-        w, _ = _synthetic_exact(mm, CC, np.asarray(DD))
-        for nroots in (1, 3):
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter('always')
-                res = ee_fold.solve_folded(_synthetic_pieces(mm, CC, DD), nroots,
-                                           spin='singlet', dense_limit=0,
-                                           tol_omega=1e-10)
-            d = np.abs(res.omega[:nroots] - w[:nroots]).max() \
-                if res.omega.size >= nroots else np.inf
-            ok &= check(d < 1e-8 and not caught,
-                        f'Davidson, n {n}, {tag}: a state last on M folded lowest '
-                        f'is found at nroots {nroots}',
-                        f'max |dw| {d:.1e} Ha, loop {res.loop}, '
-                        f'{len(caught)} warning(s)')
+    calls, solve = [], ee_fold.solve_symmetric
+
+    def counted(*a, **k):
+        calls.append(k.get('label', ''))
+        return solve(*a, **k)
+    ee_fold.solve_symmetric = counted
+    try:
+        for tag, mm, CC, DD in (('diagonal', m, C, D),
+                                ('coupled block', Mf, Cb, [2.2])):
+            w, _ = _synthetic_exact(mm, CC, np.asarray(DD))
+            for nroots in (1, 3):
+                calls.clear()
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter('always')
+                    res = ee_fold.solve_folded(_synthetic_pieces(mm, CC, DD), nroots,
+                                               spin='singlet', dense_limit=0,
+                                               tol_omega=1e-10)
+                d = np.abs(res.omega[:nroots] - w[:nroots]).max() \
+                    if res.omega.size >= nroots else np.inf
+                n_check = sum(c.endswith(' check') for c in calls)
+                ok &= check(d < 1e-8 and not caught and n_check <= 2,
+                            f'Davidson, n {n}, {tag}: a state last on M folded '
+                            f'lowest is found at nroots {nroots}, by one check that '
+                            'finds it and one that confirms',
+                            f'max |dw| {d:.1e} Ha, loop {res.loop}, '
+                            f'{len(caught)} warning(s), {n_check} check solve(s)')
+    finally:
+        ee_fold.solve_symmetric = solve
     return ok
 
 
