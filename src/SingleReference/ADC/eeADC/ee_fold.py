@@ -653,7 +653,11 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
     either, so a pair closer than the ω accuracy has ill-determined vectors; a
     near-degeneracy the fold creates, absent from M, can collapse two seeds onto one
-    root, which the duplicate check reports.
+    root, which the duplicate check reports. On the Davidson branch, where the
+    starts are exact eigenvectors of A_eff (M and the couplings diagonal in the
+    same basis), one partner of an exactly degenerate level the seeds miss can stay
+    hidden: the level returns once, a higher root takes the other place, and the
+    call warns of a copy.
 
     Parameters
     ----------
