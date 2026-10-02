@@ -45,10 +45,10 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       count with a warning. Check 12's collapsing pair drops its copy and gets the
       missed root back by branch index, on the Davidson branch too at tol_omega
       far below tol_residual.
-  14. the count's blind spots from the review of 38b97cc: a state M's diagonal
-      ranks last but folded lowest, a missing branch mixed with a found root at
-      the cut (25 points), and one count solve per call when nothing is missing; a
-      bracket narrower than tol_omega stops the index solve at once.
+  14. the count where M misleads it: a state M's diagonal ranks last but folded
+      lowest, a missing branch mixed with a found root at the cut (25 points), and
+      one count solve per call when nothing is missing; a bracket narrower than
+      tol_omega stops the index solve at once.
   15. a block of columns through folded_operator (adc2, gf2, gw; both channels and
       spin None; omega None and 0.3 Ha), through the adc3 couplings at second order,
       and through dense_effective in blocks of 3 and n equals the same columns one
@@ -685,12 +685,11 @@ def _synthetic_exact(m, C, D):
 
 
 def check_collapsing_pair():
-    """A distinct pair 7.05e-7 Ha apart whose seeds lie 0.22 Ha apart in M (the probe
-    developments/ee_gw_fold/probe_lowdin_pair_2026-09-30): both seeds converge onto
-    the lower root. The fold reports the duplicate, drops the copy, keeps one exact
-    root and solves the missed one by its branch index (one root short of
-    nroots); on the Davidson branch with tol_omega far below tol_residual (the
-    plan-2 M-1 setting) the duplicate window tied to tol_residual catches it."""
+    """A distinct pair 7.05e-7 Ha apart whose seeds lie 0.22 Ha apart in M: both
+    seeds converge onto the lower root. The fold reports the duplicate, drops the
+    copy, keeps one exact root and solves the missed one by its branch index (one
+    root short of nroots); on the Davidson branch with tol_omega far below
+    tol_residual the duplicate window tied to tol_residual catches it."""
     from src.SingleReference.ADC.eeADC import ee_fold
     ok = True
     D = np.array([1.0, 1.4])
@@ -848,11 +847,10 @@ def check_seeding_gap():
 
 
 def check_index_solve(eps, B, no):
-    """The count's blind spots, found by the review of 38b97cc
-    (developments/ee_gw_fold/review_seedfix_2026-10-01): a state M's diagonal
-    ranks last, folded to the bottom (I1); a missing branch mixed 30 to 60 degrees
-    with a found root at the cut (I4, the reviewer's 25-point scan); and one count
-    solve per call on water when nothing is missing (I3)."""
+    """The count where M misleads it: a state M's diagonal ranks last, folded to
+    the bottom; a missing branch mixed 30 to 60 degrees with a found root at the
+    cut (25 points); and one count solve per call on water when nothing is
+    missing."""
     from src.SingleReference.ADC.eeADC import ee_fold
     ok = True
     m = 0.5 + 0.02 * np.arange(12)

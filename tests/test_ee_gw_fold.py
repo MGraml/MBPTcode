@@ -288,7 +288,7 @@ QUACK_UPF = {('tda', 'singlet'): (8.427847, 0.964662),
 
 
 def check_quack_h2o():
-    """Check 3 pinned: the fold against QuAcK's printed roots, 1e-5 eV and 1e-5 on
+    """Check 6: the fold against QuAcK's printed roots, 1e-5 eV and 1e-5 on
     T1 (QuAcK prints 1e-6)."""
     mol = gto.M(atom=QUACK_H2O, basis='cc-pvdz', verbose=0)
     mf = scf.RHF(mol)
