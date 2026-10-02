@@ -16,8 +16,7 @@ Routes:
                    An RHF reference yields singlets AND triplets interleaved;
                    `spin` there goes through the numerical CSF isometry.
 
-level in ('adc1', 'adc2', 'adc2x', 'adc3', 'gf2'); gf2 on the 'spinfree' and
-'unrestricted' routes only.
+level in ('adc1', 'adc2', 'adc2x', 'adc3', 'gf2').
 """
 import warnings
 

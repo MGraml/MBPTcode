@@ -27,7 +27,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
      solve over both channels.
   7. gf2: the fold equals the full gf2 channel solve; the dense integral route
      equals the DF route with exact factors; the unrestricted route on an RHF
-     reference equals the spin-free one (6-31G).
+     reference equals the spin-free one (6-31G), and so does the spin-orbital route,
+     singlets and triplets, whose Davidson equals its dense supermatrix (STO-3G).
   8. pieces=True with parity and en_dress at gf2 raise ValueError; an exhausted
      step budget reports converged False with a warning; no input is mutated.
   9. eq 53 as printed (Monino and Loos 2023: eq 54a plus the six terms of eq 56,
@@ -420,6 +421,27 @@ def check_gf2_solves(mf, eps, B, no):
     d = float(np.max(np.abs(np.asarray(e_sf) - np.asarray(e_u)))) * ev
     ok &= check(d < 1e-6, 'gf2: the unrestricted route on an RHF reference equals the '
                 'spin-free one, both channels (6-31G)', f'|d| {d:.1e} eV')
+    mf_s = scf.RHF(gto.M(atom=WATER, basis='sto-3g', verbose=0))
+    mf_s.conv_tol = 1e-12
+    mf_s.kernel()
+    for spin in ('singlet', 'triplet'):
+        # with spin set the spin-orbital route projects its dense supermatrix
+        e_sf, _ = solve_ee_adc(mf_s, level='gf2', nroots=3, spin=spin,
+                               matrix_free=False)
+        e_so, _ = solve_ee_adc(mf_s, level='gf2', nroots=3, spin=spin,
+                               route='spinorbital')
+        d = float(np.max(np.abs(np.sort(e_so) - np.sort(e_sf)))) * ev
+        ok &= check(d < 1e-6, f'gf2 {spin}: the spin-orbital route equals the '
+                    'spin-free one (STO-3G)', f'|d| {d:.1e} eV')
+    # spin=None and dense_limit 0: the matrix-free ee_u_sigma_full by Davidson;
+    # 10 roots end on whole levels (Ms = 0, +-1 triplets come in threes)
+    e_d, _ = solve_ee_adc(mf_s, level='gf2', nroots=10, route='spinorbital',
+                          matrix_free=False)
+    e_m, _ = solve_ee_adc(mf_s, level='gf2', nroots=10, route='spinorbital',
+                          dense_limit=0, conv_tol=1e-10)
+    d = float(np.max(np.abs(np.sort(e_m) - np.sort(e_d)))) * ev
+    ok &= check(d < 1e-6, 'gf2: the spin-orbital Davidson equals its dense '
+                'supermatrix, ten lowest of both channels (STO-3G)', f'|d| {d:.1e} eV')
     return ok
 
 
