@@ -26,7 +26,8 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
   6. the Davidson branch equals the dense one on water; spin=None equals the full
      solve over both channels.
   7. gf2: the fold equals the full gf2 channel solve; the dense integral route
-     equals the DF route with exact factors.
+     equals the DF route with exact factors; the unrestricted route on an RHF
+     reference equals the spin-free one (6-31G).
   8. pieces=True with parity and en_dress at gf2 raise ValueError; an exhausted
      step budget reports converged False with a warning; no input is mutated.
   9. eq 53 as printed (Monino and Loos 2023: eq 54a plus the six terms of eq 56,
@@ -64,6 +65,13 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       root and says so; with no round left the missing root is named; an index
       step that leaves its bracket bisects it; a missing group whose roots differ
       is re-solved per branch, on both branches.
+  19. a state folded to within a found root's window, that root not the cut, below
+      or above it: the found root's branch comes from its own vector and the missed
+      state is solved, both roots exact, no warning, on both branches.
+  20. the index solve keeps the cut's vectors in every start: a state folded
+      between two found roots is solved on the Davidson branch from a start of
+      exact eigenvectors (n 4) and from one symmetry block of two (n 200), without
+      a warning.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -273,7 +281,7 @@ def check_solve_folded(mf, eps, B, no):
 
 
 # exact Td: every coordinate is +-0.6276, so the T2 triple is degenerate to
-# machine precision (the NH3 of the plan, rounded, splits its E pair by 2e-4 eV)
+# machine precision (a rounded C3v NH3 splits its E pair by 2e-4 eV)
 CH4 = ('C 0 0 0; H 0.6276 0.6276 0.6276; H -0.6276 -0.6276 0.6276; '
        'H -0.6276 0.6276 -0.6276; H 0.6276 -0.6276 -0.6276')
 
@@ -394,6 +402,13 @@ def check_gf2_solves(mf, eps, B, no):
     d = float(np.max(np.abs(np.asarray(e_dense) - np.asarray(e_exact)))) * ev
     ok &= check(d < 1e-6, 'gf2: dense integral route equals DF with exact factors',
                 f'|d| {d:.1e} eV')
+    mf6 = water_df('6-31g')[0]
+    e_sf, _ = solve_ee_adc(mf6, level='gf2', nroots=4, df=True, conv_tol=1e-10)
+    e_u, _ = solve_ee_adc(mf6.to_uhf(), level='gf2', nroots=4, df=True,
+                          route='unrestricted', conv_tol=1e-10)
+    d = float(np.max(np.abs(np.asarray(e_sf) - np.asarray(e_u)))) * ev
+    ok &= check(d < 1e-6, 'gf2: the unrestricted route on an RHF reference equals the '
+                'spin-free one, both channels (6-31G)', f'|d| {d:.1e} eV')
     return ok
 
 
@@ -576,8 +591,7 @@ def _ms0(A4, no, nv):
 def check_eq53_transcription(eps, B, no):
     """Eq 53 of Monino and Loos, JCP 159, 034105 (2023), as printed: eq 54a plus the
     six terms of eq 56, transcribed in spin orbitals on the same DF factors, against
-    the gf2 A_eff element by element; with eq 57 added, against the adc2 A_eff. The
-    run 2026-09-29_gf2-eq56-transcription found max |d| 3.6e-15 Ha."""
+    the gf2 A_eff element by element; with eq 57 added, against the adc2 A_eff."""
     from src.SingleReference.ADC.eeADC import ee_fold
     ok = True
     g, e = _spin_orbital_asym(eps, B, no)
@@ -1037,7 +1051,8 @@ def check_index_bracket():
         for tag, f, om, lo, hi in (('pinned', stub(1.0, 1e-4, 0.0), 0.5, 0.5, 0.5),
                                    ('newton', stub(-0.5, 5.0, 0.5), 2.0, 2.0, 4.0)):
             ee_fold._lowest_at = f
-            out[tag] = ee_fold._index_solve(None, None, 0, 1, om, lo, hi, None, 0,
+            out[tag] = ee_fold._index_solve(None, None, 0, 1, om, lo, hi,
+                                            np.ones((1, 1)), 0,
                                             1e-6, 1e-6, 42, 'test', 0)
     finally:
         ee_fold._lowest_at = orig
@@ -1139,8 +1154,8 @@ def check_warning_paths(eps, B, no):
     ee_fold._lowest_at = lowest_at
     try:
         lam, _, _, k, conv, _ = ee_fold._index_solve(None, None, 0, 1, 2.0, 1.0, 2.0,
-                                                     None, 0, 1e-6, 1e-10, 42,
-                                                     'test', 0)
+                                                     np.ones((1, 1)), 0, 1e-6, 1e-10,
+                                                     42, 'test', 0)
     finally:
         ee_fold._lowest_at = orig
     ok &= check(conv and k == 3 and abs(lam[0] - 1.25) < 1e-12,
@@ -1161,6 +1176,65 @@ def check_warning_paths(eps, B, no):
                     and res.loop == ['index'],
                     f'dense_limit {dl}: a missing group split at its roots is '
                     're-solved per branch, the lowest root exact', f'|dw| {d:.1e} Ha')
+    return ok
+
+
+def _fold_run(m, C, D, nroots, **kw):
+    """(roots, max |w - exact| over the nroots lowest, warnings) of solve_folded on
+    _synthetic_pieces(m, C, D), singlet."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    w = np.sort(_synthetic_exact(m, C, D)[0])[:nroots]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res = ee_fold.solve_folded(_synthetic_pieces(m, C, D), nroots, spin='singlet',
+                                   **kw)
+    got = np.sort(res.omega)[:nroots]
+    d = float(np.abs(got - w).max()) if got.size == nroots else np.inf
+    return got, d, [str(x.message) for x in caught]
+
+
+def check_window_branch():
+    """A state M ranks third, folded to within delta of the found root 0.5 (inside
+    that root's count window, the root not the cut): the branch index of the found
+    root comes from its own vector, so the missed state is solved, not the found one
+    again, with delta below or above 0.5, on both branches, without a warning."""
+    ok = True
+    for delta, tol_omega in ((1e-6, 1e-6), (-1e-6, 1e-6), (5e-9, 1e-10)):
+        om = 0.5 - delta
+        C = np.array([[0.0, 0.0, np.sqrt((0.9 - om) * (1.2 - om))]])
+        for dl in (2000, 0):
+            got, d, msgs = _fold_run(np.array([0.5, 0.6, 0.9]), C, np.array([1.2]), 2,
+                                     tol_omega=tol_omega, dense_limit=dl)
+            ok &= check(d < 1e-8 and not msgs,
+                        f'delta {delta:+.0e}, tol_omega {tol_omega:.0e}, dense_limit '
+                        f'{dl}: both roots, no warning',
+                        f'got {np.round(got, 9).tolist()}, {len(msgs)} warning(s)')
+    return ok
+
+
+def check_index_start():
+    """The index solve keeps the cut's vectors in every Davidson start: a state last
+    on M, folded to 0.55 between the found roots 0.5 and 0.6, is lost by a start of
+    exact eigenvectors (n 4) or of one symmetry block (n 200, A_eff block diagonal
+    in two irreps) unless it rides along; Davidson branch, no warning."""
+    ok = True
+    om = 0.55
+    C = np.array([[0.0, 0.0, 0.0, np.sqrt((1.0 - om) * (0.8 - om))]])
+    got, d, msgs = _fold_run(np.array([0.5, 0.6, 0.9, 1.0]), C, np.array([0.8]), 2,
+                             dense_limit=0)
+    ok &= check(d < 1e-8 and not msgs, 'n 4, exact eigenvector starts: 0.5 and 0.55',
+                f'got {np.round(got, 9).tolist()}, {len(msgs)} warning(s)')
+    n, rng = 200, np.random.default_rng(3)
+    irrep = np.r_[0, 0, np.arange(n - 3) % 2, 1]
+    R = rng.standard_normal((n, n)) * 1e-2
+    R = 0.5 * (R + R.T) * (irrep[:, None] == irrep[None, :])
+    m = np.diag(np.r_[0.5, 0.6, np.linspace(0.62, 1.5, n - 3), 1.6]) + R
+    C = np.zeros((1, n))
+    C[0, -1] = np.sqrt((1.6 - om) * (0.8 - om))
+    got, d, msgs = _fold_run(m, C, np.array([0.8]), 2, dense_limit=0)
+    ok &= check(d < 1e-7 and not msgs,
+                'n 200, two irreps: the steep state of the other irrep is found',
+                f'|dw| {d:.1e} Ha, {len(msgs)} warning(s)')
     return ok
 
 
@@ -1192,6 +1266,8 @@ def main():
     all_ok &= check_hidden_branch()
     all_ok &= check_dense_default()
     all_ok &= check_warning_paths(eps, B, no)
+    all_ok &= check_window_branch()
+    all_ok &= check_index_start()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 

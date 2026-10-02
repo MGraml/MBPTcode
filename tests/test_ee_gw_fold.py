@@ -11,14 +11,16 @@ Checks, water (RHF, DF factors), basis per check:
   3. the fold and the builder leave D, W and the input vector untouched; an unknown
      screening raises ValueError, and so do gw pieces without dnorm2; the Davidson
      branch equals the dense one (6-31G, TDA, 1e-10 Ha and 1e-8 on T1).
-  4. eq 66 transcribed from QuAcK's loops (RGW_phBSE_upfolded_sym.f90 86-216) on
-     CasidaSolver's modes, both screenings: M per channel and the full spectrum to
-     1e-10 Ha; this pins sqrt(2), 1/2, the signs, the spin, and QPqb's normalisation.
+  4. eq 66 transcribed from QuAcK's loops (RGW_phBSE_upfolded_sym.f90 lines 86-216
+     at QuAcK 2236bfc) on CasidaSolver's modes, both screenings: M per channel and
+     the full spectrum to 1e-10 Ha; this pins sqrt(2), 1/2, the signs, the spin, and
+     QPqb's normalisation.
   5. with TDA screening and without eq 70, the spectrum equals Bintrim and
      Berkelbach's H~ (bse_upfolded.build_hamiltonian_familiar), STO-3G, 1e-10 Ha.
   6. QuAcK's RGW_phBSE_upfolded_sym on H2O/cc-pVDZ at QuAcK's geometry, four-index
      HF, exact factors: S1, T1 and their 1h1p weight, TDA_W on and off, to 1e-5 eV and
-     1e-5 (runs 2026-09-25_quack-xcheck-h2o and 2026-09-30_quack-xcheck-h2o-upf-rpaw).
+     1e-5 (QuAcK master 2236bfc, github.com/pfloos/QuAcK, its upfolded phBSE switched
+     on in RGW_phBSE; the printed values are QUACK_UPF below).
   7. H2CO / STO-3G, TDA screening, where the fold reorders the seeds of M past
      nroots: the singlet's 3 and the triplet's 4 lowest roots equal the lowest
      eigenvalues of check 4's supermatrix below min D, on both branches, to 1e-9 Ha,

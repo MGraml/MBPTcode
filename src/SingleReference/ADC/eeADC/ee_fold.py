@@ -567,11 +567,15 @@ def _index_solve(pieces, spin, a, b, om, lo, hi, X, dense, tol_residual, tol_ome
     is unique and stays inside [lo, hi]; Newton ω + (λ̄ - ω) T̄1 from om,
     bisection when a step leaves the bracket, a stop (unconverged) once the bracket
     is narrower than tol_omega, where the eigensolver's precision limits |λ̄ - ω|.
-    X (n, c): the previous eigenvectors, the Davidson start. Returns λ_j (g,),
-    Z (n, g), T1 (g,), steps, converged and |λ̄ - ω| of the last step."""
-    k = 0
+    X (n, c): the cut's eigenvectors, the first Davidson start and part of every
+    later one, beside the previous step's. Returns λ_j (g,), Z (n, g), T1 (g,),
+    steps, converged and |λ̄ - ω| of the last step."""
+    k, X_c = 0, X
     while True:
-        lam, X, dmv = _lowest_at(pieces, om, spin, b, dense, tol_residual, label, X)
+        # a branch the Newton point moved out of the b lowest is found again from
+        # the cut's vectors, where it was low
+        lam, X, dmv = _lowest_at(pieces, om, spin, b, dense, tol_residual, label,
+                                 np.column_stack([X, X_c]) if k else X)
         lam, Z = lam[a:b], X[:, a:b]
         # T1_j = 1 / (1 + sum_K Y_Kj²), Y the doubles image of the unit y_j
         t1 = np.array([1.0 / (1.0 + dmv(Z[:, j])) for j in range(b - a)])
@@ -628,8 +632,10 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     compared with the roots found there; a branch inside the window is
     degenerate with ω_c to that resolution. When roots are missing, or fewer
     than nroots were found, each root found gets its branch index from the
-    branches below its own window, and every branch up to nroots that no root
-    covers is solved by its index: Newton on λ_j(ω) - ω inside the
+    branches below its own window, or, where that window holds more branches
+    than roots, from the window branches its vector projects onto most; every
+    branch up to nroots that no root covers is solved by its index: Newton on
+    λ_j(ω) - ω inside the
     bracket between λ_j(ω_c) and ω_c, bisection when a step leaves it, a group of
     branches degenerate at ω_c at one ω (loop 'index'). At most 3 rounds, then a
     RuntimeWarning names the count; one also warns when more roots are found at or
@@ -641,7 +647,7 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     highest, a second Davidson, from the random vector alone and off the span
     of the count's vectors, looks for an eigenvalue in the window or below it;
     one it finds joins the count's start, and the count's vectors join the
-    start of every per-root count.
+    start of every per-root count and of every step of the index solve.
 
     Limits: the vectors of two distinct roots split by δ are determined to about
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
@@ -862,9 +868,16 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
             while b < found.size and found[b] - found[a] <= tol:
                 b += 1
             # the cut's eigenvectors in the start carry what its search found
-            c = count_below(float(found[a]), b + 1,
-                            np.column_stack([Yl[:, :b], X]))[0]
-            covered.update(range(c, c + b - a))
+            c, c_hi, _, Xf, _ = count_below(float(found[a]), b + 1,
+                                            np.column_stack([Yl[:, :b], X]))
+            if c_hi - c > b - a:
+                # the window holds a branch no root of the group found: the group
+                # takes the window branches its vectors project onto most,
+                # p_j = sum_r (sum_p Xf_pj Yl_pr)², r over the group
+                p = np.sum((Xf[:, c:c_hi].T @ Yl[:, a:b]) ** 2, axis=1)
+                covered.update(int(c + j) for j in np.argsort(p)[::-1][:b - a])
+            else:
+                covered.update(range(c, c + b - a))
             a = b
         missing = [j for j in range(nroots) if j not in covered]
         if rnd == _COUNT_ROUNDS or not missing:
