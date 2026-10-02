@@ -134,7 +134,7 @@ def folded_operator(pieces, omega, spin=None):
         u (n,) -> A_eff(ω) u (n,), n = 2 no nv or the channel's size; a block
         U (n, b), index order (row, column), -> A_eff(ω) U (n, b), every column
         in one batched contraction (pieces 'V' and 'Vt' then see SB blocks with
-        a leading batch axis).
+        a leading batch axis); any 2-D input is a block, a column (n, 1) included.
     dmatvec : callable
         u (n,) -> sum_K (sum_jb V_K,jb u_jb)² / (D_K - ω)² (a float), so that
         dλ/dω = -dmatvec(y) for a unit eigenvector y; 0.0 when omega is None.
@@ -316,7 +316,8 @@ def _doubles_image(pieces, u, omega, embed):
 
 def _duplicates(omega, y, t1, Yt, dot, tol_omega):
     """Pairs (r, s), r < s, of roots that landed on one root: |ω_r - ω_s| below
-    2 tol_omega (two copies of a converged root differ by up to that) and a
+    2 tol_omega, tol_omega the caller's half-window (two copies of a root
+    converged to tol_omega differ by up to 2 tol_omega), and a
     full-vector overlap
 
         |x_r · x_s| = sqrt(T1_r T1_s) |y_r · y_s + Ỹ_r · Ỹ_s|
@@ -324,7 +325,7 @@ def _duplicates(omega, y, t1, Yt, dot, tol_omega):
     above _DUPLICATE; it vanishes for distinct roots at any T1, where the singles
     overlap alone need not. omega, t1: shape (nout,); y: shape (n, nout), unit
     singles in the channel basis; Yt: the roots' Ỹ (_doubles_image), indexed by
-    root, read only for roots within 2 tol_omega of another;
+    root, read only for roots within that window of another;
     dot: the doubles inner product (_doubles_dot)."""
     out = []
     for s in range(len(omega)):
@@ -612,8 +613,9 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     by nroots comes back whole: up to g - 1 roots more than asked. Two roots that
     land on one root (|Δω| below the larger of 2 tol_omega and tol_residual,
     full-vector overlap above 0.5) warn, and one copy is dropped from the result,
-    the stalled one if the other converged, else the later; the count check below
-    then solves the root it missed. Warnings name a root by its ω and a level by
+    the stalled one if the other converged, else the later; while ω_c (below)
+    lies under min_K D_K, the count check then solves the root it missed.
+    Warnings name a root by its ω and a level by
     its FoldResult.level index, since the result is sorted by ω; a split level's
     roots count its joint steps in their own.
 
@@ -630,8 +632,8 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     covers is solved by its index: Newton on λ_j(ω) - ω inside the
     bracket between λ_j(ω_c) and ω_c, bisection when a step leaves it, a group of
     branches degenerate at ω_c at one ω (loop 'index'). At most 3 rounds, then a
-    RuntimeWarning names the count; one also warns when more roots are found below
-    ω_c than the count admits. With ω_c at or above min_K D_K the count is not
+    RuntimeWarning names the count; one also warns when more roots are found at or
+    below ω_c than the count admits. With ω_c at or above min_K D_K the count is not
     checked, with a RuntimeWarning. Roots solved past the cut are dropped. The
     Davidson solves of the count start from the roots found, one random vector
     and M's lowest diagonal entries.
@@ -640,7 +642,11 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
     either, so a pair closer than the ω accuracy has ill-determined vectors; a
     near-degeneracy the fold creates, absent from M, can collapse two seeds onto one
-    root, which the duplicate check reports.
+    root, which the duplicate check reports. The count's Davidson sees a branch
+    only through its start: where the roots found and M's diagonal seeds are exact
+    eigenvectors of A_eff (a constructed input; molecular seeds are not), the
+    random vector's weight on a hidden state falls as n^(-1/2), and such a state
+    can stay hidden at large n.
 
     Parameters
     ----------
