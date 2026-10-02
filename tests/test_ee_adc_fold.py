@@ -1355,10 +1355,11 @@ def check_degenerate_hidden():
 
 
 def _spin_none_solve(m, C, D0):
-    """solve_folded(nroots 4, spin=None, Davidson) on _synthetic_pieces(m, C, D0)."""
+    """solve_folded(nroots 4, spin=None, Davidson, tol_omega 1e-10, the precision the
+    check asks of it) on _synthetic_pieces(m, C, D0)."""
     from src.SingleReference.ADC.eeADC import ee_fold
     return ee_fold.solve_folded(_synthetic_pieces(m, C, np.array([D0])), 4, spin=None,
-                                dense_limit=0)
+                                dense_limit=0, tol_omega=1e-10)
 
 
 def main():
