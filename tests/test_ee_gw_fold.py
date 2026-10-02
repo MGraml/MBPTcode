@@ -44,6 +44,7 @@ WATER = 'O 0 0 0; H 0 0.757 0.587; H 0 -0.757 0.587'
 
 
 def check(ok, label, detail=''):
+    """Print one verdict line and return `ok` as a bool."""
     tail = f'   ({detail})' if detail else ''
     print(f"  [{'ok' if ok else 'FAIL'}] {label}" + tail)
     return bool(ok)
@@ -347,6 +348,7 @@ def check_seeding_gap():
 
 
 def main():
+    """Run every check; print ALL PASSED or FAILURES DETECTED; exit 0 or 1."""
     all_ok = True
     mf, eps, B, no = water('6-31g')
     all_ok &= check_pieces(eps, B, no)

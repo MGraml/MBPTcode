@@ -80,6 +80,7 @@ WATER = 'O 0 0 0; H 0 0.757 0.587; H 0 -0.757 0.587'
 
 
 def check(ok, label, detail=''):
+    """Print one verdict line and return `ok` as a bool."""
     tail = f'   ({detail})' if detail else ''
     print(f"  [{'ok' if ok else 'FAIL'}] {label}" + tail)
     return bool(ok)
@@ -97,6 +98,7 @@ def water_df(basis='cc-pvdz'):
 
 
 def check_pieces(eps, B, no):
+    """Checks 1 and 2: the fold's pieces at adc2 and the gf2 block order."""
     ok = True
     aop, diag, dims, P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2',
                                                       pieces=True)
@@ -152,6 +154,7 @@ def check_gf2(eps, B, no):
 
 
 def check_folded_operator(mf, eps, B, no):
+    """Check 3: A_eff(w) at the full solve's roots."""
     from src.SingleReference.ADC.eeADC import ee_fold
     from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
     ok = True
@@ -197,6 +200,7 @@ def check_folded_operator(mf, eps, B, no):
 
 
 def check_solve_folded(mf, eps, B, no):
+    """Check 4: solve_folded at adc2 against the full Davidson roots."""
     from src.SingleReference.ADC.eeADC import ee_fold
     from src.SingleReference.ADC.eeADC.ee_driver import solve_ee_adc
     ok = True
@@ -1078,6 +1082,7 @@ def check_dense_default():
 
 
 def main():
+    """Run every check; print ALL PASSED or FAILURES DETECTED; exit 0 or 1."""
     all_ok = True
     mf, eps, B, no = water_df()
     all_ok &= check_pieces(eps, B, no)
