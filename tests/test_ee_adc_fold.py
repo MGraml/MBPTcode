@@ -80,6 +80,9 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       first.
   23. an unknown level and an unknown spin raise ValueError; a fixed-point loop
       out of steps warns, and the count solves its root again by index.
+  24. an exactly degenerate pair the seeds miss, with M's seeds exact eigenvectors
+      (spin=None on pieces without a cross-spin block, n 20 and 200, Davidson):
+      the count's check finds both partners, no warning.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -1305,6 +1308,37 @@ def check_refusals():
     return ok
 
 
+def check_degenerate_hidden():
+    """spin=None doubles every state of _synthetic_pieces (no cross-spin block), so a
+    state folded below the seeds is an exact pair; the seeds are exact eigenvectors
+    (M and C diagonal in one basis). The count's check, one random vector per span,
+    finds the second partner after the first."""
+    ok = True
+    for name, om, D0, n in (('below 0.5', 0.5 - 1e-6, 1.2, 20),
+                            ('between 0.5 and 0.6', 0.55, 0.8, 20),
+                            ('below 0.5', 0.5 - 1e-6, 1.2, 200)):
+        m = np.r_[0.5, 0.6, np.linspace(0.62, 1.5, n - 3), 1.6]
+        C = np.zeros((1, n))
+        C[0, -1] = np.sqrt((1.6 - om) * (D0 - om))
+        w = np.repeat(np.sort(_synthetic_exact(m, C, np.array([D0]))[0])[:2], 2)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            res = _spin_none_solve(m, C, D0)
+        got = np.sort(res.omega)[:4]
+        d = float(np.abs(got - w).max()) if got.size == 4 else np.inf
+        ok &= check(d < 1e-8 and not caught,
+                    f'n {n}, a pair {name}: both partners, no warning',
+                    f'|dw| {d:.1e} Ha, {len(caught)} warning(s)')
+    return ok
+
+
+def _spin_none_solve(m, C, D0):
+    """solve_folded(nroots 4, spin=None, Davidson) on _synthetic_pieces(m, C, D0)."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    return ee_fold.solve_folded(_synthetic_pieces(m, C, np.array([D0])), 4, spin=None,
+                                dense_limit=0)
+
+
 def main():
     """Run every check; print ALL PASSED or FAILURES DETECTED; exit 0 or 1."""
     all_ok = True
@@ -1338,6 +1372,7 @@ def main():
     all_ok &= check_cut_above_doubles()
     all_ok &= check_guess_start()
     all_ok &= check_refusals()
+    all_ok &= check_degenerate_hidden()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 

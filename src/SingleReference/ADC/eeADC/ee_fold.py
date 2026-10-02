@@ -506,7 +506,9 @@ def _lowest_beside(matvec, diag_s, V, w0, top, tol_residual, label):
         d = diag - e + _CHECK_SHIFT
         return np.asarray(res) / np.where(np.abs(d) < 1e-8, 1e-8, d)
 
-    r = np.random.default_rng(0).standard_normal(n)
+    # a new vector per span: in a degenerate level the previous vector's whole
+    # component went to the partner it found, which V now holds
+    r = np.random.default_rng(V.shape[1]).standard_normal(n)
     r -= V @ (V.T @ r)
     # sum_q A'_pq z_q = μ z_p, the lowest, by Davidson from r alone
     mu, z, _ = solve_symmetric(lifted, diag, nroots=1, x0=r, precond=precond,
@@ -642,7 +644,7 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     Roots solved past the cut are dropped. The Davidson solves of the count start from
     the roots found, one random vector and M's lowest diagonal entries; where those are
     exact eigenvectors of A_eff the solve converges at once and can hide a branch, so at
-    the first cut, the highest, a second Davidson, from the random vector alone and off
+    the first cut, the highest, a second Davidson, from a random vector alone and off
     the span of the count's vectors, looks for an eigenvalue in the window or below it;
     one it finds joins the count's start, and the count's vectors join the start of
     every per-root count and of every step of the index solve.
@@ -651,11 +653,7 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
     either, so a pair closer than the ω accuracy has ill-determined vectors; a
     near-degeneracy the fold creates, absent from M, can collapse two seeds onto one
-    root, which the duplicate check reports. On the Davidson branch, where the
-    starts are exact eigenvectors of A_eff (M and the couplings diagonal in the
-    same basis), one partner of an exactly degenerate level the seeds miss can stay
-    hidden: the level returns once, a higher root takes the other place, and the
-    call warns of a copy.
+    root, which the duplicate check reports.
 
     Parameters
     ----------
