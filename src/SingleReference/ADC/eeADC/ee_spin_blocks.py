@@ -114,13 +114,10 @@ class SB:
     __rmul__ = __mul__
 
     def transpose(self, *axes):
-        """Permute tensor axes AND the spin string the same way; leading axes
-        beyond the spin string's (a batch of vectors) stay in front."""
+        """Permute tensor axes AND the spin string the same way."""
         if len(axes) == 1 and isinstance(axes[0], (tuple, list)):
             axes = tuple(axes[0])
-        return SB({''.join(k[a] for a in axes): v.transpose(
-                       tuple(range(v.ndim - len(axes)))
-                       + tuple(v.ndim - len(axes) + a for a in axes))
+        return SB({''.join(k[a] for a in axes): v.transpose(axes)
                    for k, v in self.blocks.items()}, parity=self.parity)
 
     def scale(self, arr):
@@ -161,21 +158,19 @@ def _with_flip(half, parity):
 
 
 def sb_einsum(subs, *ops, optimize=True):
-    """einsum over spin-blocked tensors -- see the module docstring. An
-    ellipsis ('...') carries no spin: it spans leading batch axes."""
+    """einsum over spin-blocked tensors -- see the module docstring."""
     lhs, rhs = subs.split('->')
-    terms = [t.replace('...', '') for t in lhs.split(',')]
+    terms = lhs.split(',')
     if len(terms) != len(ops):
         raise ValueError(f'{subs!r} expects {len(terms)} operands, got {len(ops)}')
-    spins = rhs.replace('...', '')
     idx = sorted(set(''.join(terms)))
     parities = [getattr(op, 'parity', None) for op in ops]
     # flip eigenvectors in, a flip eigenvector out: its alpha-first half only
-    half = bool(spins) and None not in parities
+    half = bool(rhs) and None not in parities
     out = {}
     for assign in itertools.product('ab', repeat=len(idx)):
         smap = dict(zip(idx, assign))
-        if half and smap[spins[0]] == 'b':
+        if half and smap[rhs[0]] == 'b':
             continue
         arrays = []
         for t, op in zip(terms, ops):
@@ -184,7 +179,7 @@ def sb_einsum(subs, *ops, optimize=True):
                 break
             arrays.append(arr)
         else:
-            key = ''.join(smap[c] for c in spins)
+            key = ''.join(smap[c] for c in rhs)
             val = np.einsum(subs, *arrays, optimize=optimize)
             out[key] = out[key] + val if key in out else val
     if half:
@@ -226,11 +221,10 @@ def ovvv_ia(S, X):
 
     S : ndarray, shape (nv, no, nv, nv), index order (a, j, b, c)
         The spatial V[j, a, b, c] = <ja|bc>, stored so (j, b, c) is contiguous.
-    X : SB of the six doubles blocks, index order (i, j, b, c), after optional
-        leading batch axes (x...)
+    X : SB of the six doubles blocks, index order (i, j, b, c)
 
-    Returns an SB with blocks 'aa' and 'bb', shape (x..., no, nv), index order
-    (x..., i, a). anti4's blocks of <ja||bc> are V, V - Vx and -Vx with
+    Returns an SB with blocks 'aa' and 'bb', shape (no, nv), index order
+    (i, a). anti4's blocks of <ja||bc> are V, V - Vx and -Vx with
     Vx[j,a,b,c] = V[j,a,c,b]; moving every Vx onto X as a (b, c) transpose
     leaves one V contraction per output spin,
 
@@ -244,10 +238,9 @@ def ovvv_ia(S, X):
     out = {}
     spins = (('aa', ('aaaa', 'abba', 'abab')), ('bb', ('bbbb', 'baab', 'baba')))
     for s, (same, with_v, with_neg) in (spins if X.parity is None else spins[:1]):
-        Z = (X.get(same) - X.get(same).swapaxes(-1, -2) + X.get(with_v)
-             - X.get(with_neg).swapaxes(-1, -2))
-        # [(x, i), (j, b, c)] @ [(j, b, c), a] -> (x, i, a)
-        out[s] = (Z.reshape(-1, Sm.shape[1]) @ Sm.T).reshape(Z.shape[:-3] + (-1,))
+        Z = (X.get(same) - X.get(same).transpose(0, 1, 3, 2) + X.get(with_v)
+             - X.get(with_neg).transpose(0, 1, 3, 2))
+        out[s] = Z.reshape(Z.shape[0], -1) @ Sm.T
     if X.parity is not None:
         return SB(_with_flip(out, X.parity), parity=X.parity)
     return SB(out)
@@ -257,10 +250,9 @@ def ovvv_ijab(S, x):
     """sum_c <ic||ab> x_jc for a closed-shell reference, per output spin block.
 
     S : ndarray, shape (nv, no, nv, nv), index order (a, j, b, c), as in ovvv_ia
-    x : SB with blocks 'aa' and 'bb', shape (x..., no, nv), index order
-        (x..., j, c), the leading batch axes optional
+    x : SB with blocks 'aa' and 'bb', shape (no, nv), index order (j, c)
 
-    Returns an SB of the six doubles blocks, index order (x..., i, j, a, b). With
+    Returns an SB of the six doubles blocks, index order (i, j, a, b). With
     T^s_ijab = sum_c V_icab x^s_jc, one matmul per spin, every block follows
     by an (a, b) transpose:
 
@@ -272,20 +264,20 @@ def ovvv_ijab(S, x):
     Sm = S.reshape(nv, -1)
 
     def t(xs):
-        # [(x, j), (i, a, b)], so every (i, j) slab stays contiguous in (a, b)
-        T = (xs.reshape(-1, nv) @ Sm).reshape(xs.shape[:-1] + (no, nv, nv))
-        return T.swapaxes(-3, -4)
+        # [j, (i, a, b)], so every (i, j) slab stays contiguous in (a, b)
+        return (xs @ Sm).reshape(no, no, nv, nv).transpose(1, 0, 2, 3)
 
+    swap = (0, 1, 3, 2)
     if x.parity is not None:
         Ta = t(x.get('aa'))
         Tb = Ta if x.parity > 0 else -Ta
-        return SB(_with_flip({'aaaa': Ta - Ta.swapaxes(-1, -2), 'abab': Tb,
-                              'abba': -Tb.swapaxes(-1, -2)}, x.parity),
+        return SB(_with_flip({'aaaa': Ta - Ta.transpose(swap), 'abab': Tb,
+                              'abba': -Tb.transpose(swap)}, x.parity),
                   parity=x.parity)
     Ta, Tb = t(x.get('aa')), t(x.get('bb'))
-    return SB({'aaaa': Ta - Ta.swapaxes(-1, -2), 'bbbb': Tb - Tb.swapaxes(-1, -2),
+    return SB({'aaaa': Ta - Ta.transpose(swap), 'bbbb': Tb - Tb.transpose(swap),
                'baba': Ta, 'abab': Tb,
-               'baab': -Ta.swapaxes(-1, -2), 'abba': -Tb.swapaxes(-1, -2)})
+               'baab': -Ta.transpose(swap), 'abba': -Tb.transpose(swap)})
 
 
 def g_blocks_sb(V, nocc_spatial, norb_spatial):
