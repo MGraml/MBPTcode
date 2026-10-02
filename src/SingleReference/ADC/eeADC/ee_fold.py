@@ -54,6 +54,8 @@ FOLD_LEVELS = ('adc2', 'gf2', 'gw')
 _CHANNEL = {'singlet': +1.0, 'triplet': -1.0}
 _DEGENERATE = 1e-8      # Hartree: seeds spread by at most this are one level
 _SEED_RESIDUAL = 1e-9   # seeds of M: Ritz error |r|²/gap far below _DEGENERATE
+_CHECK_SHIFT = 0.1      # Hartree: the count check's correction r / (d - e + shift)
+_CHECK_RESIDUAL = 1e-4  # the count check decides μ against a window, no tighter
 _DUPLICATE = 0.5        # full-vector overlap above which two roots are one
 _COUNT_ROUNDS = 3       # rounds of the count check before it warns
 _BLOCK_BYTES = 2 ** 31  # bytes a block's doubles images may take
@@ -532,12 +534,48 @@ def _guess(cols, diag_s, width):
     return Q[:, keep][:, :width]
 
 
+def _lowest_beside(matvec, diag_s, V, w0, top, tol_residual, label):
+    """The lowest eigenpair (μ, z (n,)) of A_eff off the span of V (n, m), its
+    columns orthonormal near-eigenvectors with eigenvalues ≥ w0: Davidson on
+    A' = A_eff + σ V V^T, σ = top - w0 + 1 Ha, which lifts them 1 Ha above top,
+    started from one random vector alone, so that no seed can converge it
+    elsewhere, with the shifted diagonal correction and to residual
+    max(tol_residual, _CHECK_RESIDUAL): the Ritz value bounds μ from above, so a
+    value at or below top is a branch there at any residual. μ > top says A_eff
+    has no eigenvalue at or below top off span V."""
+    n = diag_s.size
+    sigma = top - w0 + 1.0
+
+    def lifted(u):
+        # sum_q A'_pq u_q = sum_q A_pq u_q + σ sum_j V_pj (sum_q V_qj u_q)
+        return matvec(u) + sigma * (V @ (V.T @ u))
+
+    diag = diag_s + sigma * np.sum(V ** 2, axis=1)
+
+    def precond(res, e, u):
+        # res_p / (d_p - e + shift): the Jacobi-Davidson projection amplifies the
+        # configurations whose diagonal of M sits at e and walks down M's diagonal
+        # past a state that A_eff pulls far below it; without the shift the
+        # correction equals u where A_eff is diagonal, and the solve stalls
+        d = diag - e + _CHECK_SHIFT
+        return np.asarray(res) / np.where(np.abs(d) < 1e-8, 1e-8, d)
+
+    r = np.random.default_rng(0).standard_normal(n)
+    r -= V @ (V.T @ r)
+    # sum_q A'_pq z_q = μ z_p, the lowest, by Davidson from r alone
+    mu, z, _ = solve_symmetric(lifted, diag, nroots=1, x0=r, precond=precond,
+                               tol_residual=max(tol_residual, _CHECK_RESIDUAL),
+                               label=label + ' check')
+    return float(mu[0]), np.asarray(z, float)[:, 0]
+
+
 def _lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols, tol=None):
     """The k lowest eigenpairs of A_eff(ω), λ (m,) ascending and X (n, m), and
     dmatvec at ω; with tol also every one with λ_j ≤ ω + tol (m ≥ k). Davidson
     starts from cols (n, c), vectors expected near that span, padded by _guess;
     with tol it widens from its own Ritz vectors until the highest returned lies
-    above ω + tol."""
+    above ω + tol, and a check off their span (_lowest_beside) then looks for an
+    eigenvalue at or below ω + tol the start hid, which joins the next start."""
     matvec, dmatvec, diag_s, _, _ = folded_operator(pieces, omega, spin)
     n = diag_s.size
     k = min(k, n)
@@ -552,9 +590,18 @@ def _lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols, tol=Non
                                       tol_residual=tol_residual,
                                       label=label + ' count')
             w, v = np.asarray(w, float), np.asarray(v, float)
-            if tol is None or w[-1] > omega + tol or k == n:
+            if tol is None or k == n:
                 break
-            cols, k = v, min(2 * k, n)
+            if w[-1] <= omega + tol:
+                cols, k = v, min(2 * k, n)
+                continue
+            # a start whose vectors are exact eigenvectors converges at once
+            # and can hide a branch below ω + tol: look for one off span v
+            mu, z = _lowest_beside(matvec, diag_s, v, float(w[0]), omega + tol,
+                                   tol_residual, label)
+            if mu > omega + tol:
+                break
+            cols, k = np.column_stack([v, z]), k + 1
     m = k if tol is None else max(k, int(np.count_nonzero(w <= omega + tol)))
     return w[:m], v[:, :m], dmatvec
 
@@ -636,17 +683,17 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     below ω_c than the count admits. With ω_c at or above min_K D_K the count is not
     checked, with a RuntimeWarning. Roots solved past the cut are dropped. The
     Davidson solves of the count start from the roots found, one random vector
-    and M's lowest diagonal entries.
+    and M's lowest diagonal entries; where those are exact eigenvectors of A_eff
+    the solve converges at once and can hide a branch, so a second Davidson,
+    from the random vector alone and off the span of the count's vectors, looks
+    for an eigenvalue in the window or below it, and one it finds joins the
+    count's start.
 
     Limits: the vectors of two distinct roots split by δ are determined to about
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
     either, so a pair closer than the ω accuracy has ill-determined vectors; a
     near-degeneracy the fold creates, absent from M, can collapse two seeds onto one
-    root, which the duplicate check reports. The count's Davidson sees a branch
-    only through its start: where the roots found and M's diagonal seeds are exact
-    eigenvectors of A_eff (a constructed input; molecular seeds are not), the
-    random vector's weight on a hidden state falls as n^(-1/2), and such a state
-    can stay hidden at large n.
+    root, which the duplicate check reports.
 
     Parameters
     ----------

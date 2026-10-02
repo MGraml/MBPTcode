@@ -60,6 +60,10 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       counts whole, so a state folded below it is found and none warns; a
       distinct partner 1e-7 or 1e-6 Ha above the cut, not asked for, costs no
       warning and one count, widened once, at default tolerances.
+  18. the count's check off the span of its own vectors: on the Davidson branch at
+      n 800, a state last on M's diagonal folded lowest, where the roots found and
+      M's seeds are exact eigenvectors of A_eff, is found at nroots 1 and 3, also
+      inside a coupled block, without a warning.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -956,6 +960,46 @@ def check_count_window():
     return ok
 
 
+def check_hidden_branch():
+    """The count's independent check, on the Davidson branch: a state last on M's
+    diagonal folded lowest at n 800, where the roots found and M's diagonal seeds
+    are exact eigenvectors of A_eff, so the count's own Davidson converges at once
+    without it; the same with the folded state inside a coupled block of 50."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    n = 800
+    m = 0.5 + 0.5 * np.arange(n) / n
+    m[-1] = 3.0
+    C = np.zeros((1, n))
+    C[0, -1] = 2.75
+    D = np.array([3.1])
+    rng = np.random.default_rng(7)
+    na, nb = n - 50, 50
+    Mf = np.zeros((n, n))
+    Mf[:na, :na] = np.diag(0.5 + 0.5 * np.arange(na) / na)
+    Bm = rng.standard_normal((nb, nb)) * 2e-3
+    Mf[na:, na:] = np.diag(1.5 + 0.5 * np.arange(nb) / nb) + 0.5 * (Bm + Bm.T)
+    Cb = np.zeros((1, n))
+    Cb[0, na:] = rng.standard_normal(nb)
+    Cb *= 2.2 / np.linalg.norm(Cb)
+    for tag, mm, CC, DD in (('diagonal', m, C, D), ('coupled block', Mf, Cb, [2.2])):
+        w, _ = _synthetic_exact(mm, CC, np.asarray(DD))
+        for nroots in (1, 3):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                res = ee_fold.solve_folded(_synthetic_pieces(mm, CC, DD), nroots,
+                                           spin='singlet', dense_limit=0,
+                                           tol_omega=1e-10)
+            d = np.abs(res.omega[:nroots] - w[:nroots]).max() \
+                if res.omega.size >= nroots else np.inf
+            ok &= check(d < 1e-8 and not caught,
+                        f'Davidson, n {n}, {tag}: a state last on M folded lowest '
+                        f'is found at nroots {nroots}',
+                        f'max |dw| {d:.1e} Ha, loop {res.loop}, '
+                        f'{len(caught)} warning(s)')
+    return ok
+
+
 def check_batched(eps, B, no):
     """A block of columns, index order (row, column), through the folded matvec,
     the second-order couplings and dense_effective equals its columns one at a
@@ -1115,6 +1159,7 @@ def main():
     all_ok &= check_index_solve(eps, B, no)
     all_ok &= check_index_bracket()
     all_ok &= check_count_window()
+    all_ok &= check_hidden_branch()
     all_ok &= check_batched(eps, B, no)
     all_ok &= check_dense_default()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
