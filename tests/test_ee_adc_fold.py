@@ -59,6 +59,11 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       n 800, a state last on M's diagonal folded lowest, where the roots found and
       M's seeds are exact eigenvectors of A_eff, is found at nroots 1 and 3, also
       inside a coupled block, without a warning.
+  18. the count's paths that warn or fall back: two Newton steps leave every root
+      unconverged and the surplus warns; a pair closer than tol_omega returns one
+      root and says so; with no round left the missing root is named; an index
+      step that leaves its bracket bisects it; a missing group whose roots differ
+      is re-solved per branch, on both branches.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -1081,6 +1086,84 @@ def check_dense_default():
     return ok
 
 
+def check_warning_paths(eps, B, no):
+    """The count's paths that warn or fall back: a surplus of unconverged roots, an
+    index solve that lands on a found root, the round limit, the index solve's
+    bisection, and a missing group re-solved per branch."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+
+    def run(P, nroots, **kw):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            res = ee_fold.solve_folded(P, nroots, spin='singlet', **kw)
+        return res, [str(x.message) for x in caught]
+
+    def pair(eps_m):
+        # check 12's pair, the second state of M raised by eps_m
+        D = np.array([1.0, 1.4])
+        C = np.array([[0.3, 0.3, 0.0], [0.3, -0.54, 0.0]])
+        s = np.sum(C ** 2 / (D[:, None] - 0.5), axis=0)
+        m = np.array([0.5 + s[0], 0.5 + s[1] + eps_m, 1.5])
+        return _synthetic_pieces(m, C, D), np.sort(_synthetic_exact(m, C, D)[0])
+
+    P = ee_r_sigma_df.build_operator(eps, B, no, level='adc2', pieces=True)[3]
+    res, msgs = run(P, 5, max_newton=2, max_fixed=0)
+    ok = check(any('where A_eff has' in x for x in msgs) and not res.converged.any(),
+               'two Newton steps: every root unconverged, and the count warns of the '
+               'surplus', f'converged {res.converged.tolist()}')
+    # split 5.9e-9 Ha, below the default tol_omega: one root at that resolution
+    Pp, w = pair(1e-8)
+    res, msgs = run(Pp, 2)
+    ok &= check(any('landed on roots already found' in x for x in msgs)
+                and res.omega.size == 1 and abs(res.omega[0] - w[0]) < 2e-6,
+                'a pair closer than tol_omega: the branch solved by index lands on '
+                'the found root, which the count reports', f'nout {res.omega.size}')
+    Pp, w = pair(1.2e-6)
+    keep = ee_fold._COUNT_ROUNDS
+    ee_fold._COUNT_ROUNDS = 0
+    try:
+        res, msgs = run(Pp, 2, tol_omega=1e-12)
+    finally:
+        ee_fold._COUNT_ROUNDS = keep
+    ok &= check(any('1 of the 2 lowest roots not found after 0 round' in x
+                    for x in msgs) and res.omega.size == 1,
+                'no count round left: the missing root is named, not solved',
+                f'nout {res.omega.size}')
+
+    def lowest_at(pieces, omega, spin, k, dense, tol_residual, label, cols,
+                  tol=None):
+        # λ(ω) = 5 - 3ω with T1 = 1: every Newton step leaves the bracket [1, 2]
+        return np.array([5.0 - 3.0 * omega]), np.ones((1, 1)), lambda v: 0.0
+
+    orig = ee_fold._lowest_at
+    ee_fold._lowest_at = lowest_at
+    try:
+        lam, _, _, k, conv, _ = ee_fold._index_solve(None, None, 0, 1, 2.0, 1.0, 2.0,
+                                                     None, 0, 1e-6, 1e-10, 42,
+                                                     'test', 0)
+    finally:
+        ee_fold._lowest_at = orig
+    ok &= check(conv and k == 3 and abs(lam[0] - 1.25) < 1e-12,
+                'index solve: a step that leaves the bracket bisects it',
+                f'{k} steps, lambda {lam[0]:.12f}')
+    # two states last on M, folded through different doubles to λ = 0.3 at
+    # ω = 0.5: one missing group at the cut whose roots differ
+    m = np.array([0.5, 0.6, 0.7, 1.5, 1.5])
+    C = np.zeros((2, 5))
+    C[0, 3], C[1, 4] = np.sqrt(1.2 * 1.1), np.sqrt(1.2 * 2.0)
+    D = np.array([1.6, 2.5])
+    w = np.sort(_synthetic_exact(m, C, D)[0])
+    for dl in (2000, 0):
+        res, msgs = run(_synthetic_pieces(m, C, D), 1, tol_omega=1e-10,
+                        dense_limit=dl)
+        d = abs(res.omega[0] - w[0])
+        ok &= check(any('re-solved per branch' in x for x in msgs) and d < 1e-10
+                    and res.loop == ['index'],
+                    f'dense_limit {dl}: a missing group split at its roots is '
+                    're-solved per branch, the lowest root exact', f'|dw| {d:.1e} Ha')
+    return ok
+
+
 def main():
     """Run every check; print ALL PASSED or FAILURES DETECTED; exit 0 or 1."""
     all_ok = True
@@ -1108,6 +1191,7 @@ def main():
     all_ok &= check_count_window()
     all_ok &= check_hidden_branch()
     all_ok &= check_dense_default()
+    all_ok &= check_warning_paths(eps, B, no)
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
