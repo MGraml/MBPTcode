@@ -296,45 +296,35 @@ def _duplicate_drop(r, s, converged):
     return r if converged[s] and not converged[r] else s
 
 
-def _eig_at(pieces, omega, spin, ref, nfollow, dense, tol_residual, label):
-    """(λ, y, T1) of A_eff(ω): the eigenpair of maximal overlap with ref
-    (ref None: the lowest), by eigh below dense_limit, else by Davidson."""
+def _eig_at(pieces, omega, spin, ref, dense, tol_residual, label):
+    """(λ, y, T1) of A_eff(ω): the eigenpair of maximal overlap with ref (n,), by
+    eigh below dense_limit, else by Davidson."""
     matvec, dmatvec, diag_s, embed, restrict = folded_operator(pieces, omega, spin)
     n = diag_s.size
     if dense:
         # sum_q A_pq v_qm = w_m v_pm, A built from n matvecs
         A = dense_effective(matvec, n)
         w, v = np.linalg.eigh(A)
-        if ref is None:
-            lam, y = float(w[0]), v[:, 0]
-        else:
-            k = int(np.argmax(np.abs(ref @ v)))
-            # a degenerate eigenspace has no preferred basis: follow ref's
-            # projection onto it, y_p = sum_m v_pm sum_q v_qm ref_q over the m
-            # with w_m = w_k, so partners seeded orthogonal stay orthogonal
-            cl = np.abs(w - w[k]) < _DEGENERATE
-            lam, y = float(w[k]), v[:, cl] @ (v[:, cl].T @ ref)
+        k = int(np.argmax(np.abs(ref @ v)))
+        # a degenerate eigenspace has no preferred basis: follow ref's
+        # projection onto it, y_p = sum_m v_pm sum_q v_qm ref_q over the m
+        # with w_m = w_k, so partners seeded orthogonal stay orthogonal
+        cl = np.abs(w - w[k]) < _DEGENERATE
+        lam, y = float(w[k]), v[:, cl] @ (v[:, cl].T @ ref)
     else:
-        # sum_q A_pq x_q = λ x_p by Davidson on the matvec, A never built
-        if ref is None:
-            e, X, conv = solve_symmetric(matvec, diag_s, nroots=nfollow,
-                                         tol_residual=tol_residual, label=label)
-            k = 0
-        else:
-            # overlap_pick ranks Ritz vectors by |<ref|x>|; past the followed
-            # root that ranking is noise and never converges, so follow one
-            e, X, conv = solve_symmetric(matvec, diag_s, nroots=1, x0=ref,
-                                         pick=overlap_pick(ref),
-                                         tol_residual=tol_residual, label=label)
-            k = 0
-        lam, y = float(e[k]), np.asarray(X[:, k], float)
+        # sum_q A_pq x_q = λ x_p by Davidson on the matvec, A never built;
+        # overlap_pick ranks Ritz vectors by |<ref|x>|; past the followed
+        # root that ranking is noise and never converges, so follow one
+        e, X, conv = solve_symmetric(matvec, diag_s, nroots=1, x0=ref,
+                                     pick=overlap_pick(ref),
+                                     tol_residual=tol_residual, label=label)
+        lam, y = float(e[0]), np.asarray(X[:, 0], float)
     y = y / np.linalg.norm(y)
-    if ref is not None:
-        ov = abs(float(ref @ y))
-        if ov < 0.5:
-            warnings.warn(f'{label}: root crossing, overlap with the previous vector '
-                          f'{ov:.3f} at omega = {omega:.6f} Ha; the picked vector is '
-                          'kept', RuntimeWarning, stacklevel=3)
+    ov = abs(float(ref @ y))
+    if ov < 0.5:
+        warnings.warn(f'{label}: root crossing, overlap with the previous vector '
+                      f'{ov:.3f} at omega = {omega:.6f} Ha; the picked vector is '
+                      'kept', RuntimeWarning, stacklevel=3)
     t1 = 1.0 / (1.0 + dmatvec(y))
     return lam, y, t1, embed
 
@@ -419,13 +409,13 @@ def _iterate(step, om, tol_omega, t_min, max_newton, max_fixed, label, verbose):
             om = _diis_step(hist_o, hist_e)
 
 
-def _root_step(pieces, spin, y, nfollow, dense, tol_residual, label):
+def _root_step(pieces, spin, y, dense, tol_residual, label):
     """step(ω) for one root, following the previous vector."""
     ref = [y]
 
     def step(om):
-        lam, yk, t1, _ = _eig_at(pieces, om, spin, ref[0], nfollow, dense,
-                                 tol_residual, label)
+        lam, yk, t1, _ = _eig_at(pieces, om, spin, ref[0], dense, tol_residual,
+                                 label)
         ref[0] = yk
         return lam, t1, yk
 
@@ -471,16 +461,23 @@ def _seed_levels(m0, diag_s, n, nroots, dense, tol_residual, label):
 def _guess(cols, diag_s, width):
     """An orthonormal Davidson start, shape (n, m ≤ width): the columns cols (n, c)
     first, then one fixed random vector, which has a component in every block the
-    others miss, then the unit vectors on the lowest entries of diag_s."""
+    others miss, then the unit vectors on the lowest entries of diag_s; a vector
+    in the span of those before it is skipped and the next seed takes its place."""
     n = diag_s.size
     width = min(width, n)
     rng = np.random.default_rng(0)
-    G = np.column_stack([np.reshape(cols, (n, -1))[:, :width - 1],
-                         rng.standard_normal(n)]
-                        + diagonal_seeds(diag_s, width))
-    Q, R = np.linalg.qr(G)
-    keep = np.abs(np.diag(R)) > 1e-8 * np.abs(np.diag(R)).max()
-    return Q[:, keep][:, :width]
+    cand = (list(np.reshape(cols, (n, -1)).T[:width - 1]) + [rng.standard_normal(n)]
+            + diagonal_seeds(diag_s, min(n, 2 * width)))
+    Q = np.empty((n, 0))
+    for g in cand:
+        # g_p - sum_j Q_pj (sum_q Q_qj g_q), twice; kept unless it lies in span Q
+        r = g - Q @ (Q.T @ g)
+        r -= Q @ (Q.T @ r)
+        if np.linalg.norm(r) > 1e-8 * np.linalg.norm(g):
+            Q = np.column_stack([Q, r / np.linalg.norm(r)])
+        if Q.shape[1] == width:
+            break
+    return Q
 
 
 def _lowest_beside(matvec, diag_s, V, w0, top, tol_residual, label):
@@ -639,15 +636,16 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     bracket between λ_j(ω_c) and ω_c, bisection when a step leaves it, a group of
     branches degenerate at ω_c at one ω (loop 'index'). At most 3 rounds, then a
     RuntimeWarning names the count; one also warns when more roots are found at or
-    below ω_c than the count admits. With ω_c at or above min_K D_K the count is not
-    checked, with a RuntimeWarning. Roots solved past the cut are dropped. The
-    Davidson solves of the count start from the roots found, one random vector
-    and M's lowest diagonal entries; where those are exact eigenvectors of A_eff
-    the solve converges at once and can hide a branch, so at the first cut, the
-    highest, a second Davidson, from the random vector alone and off the span
-    of the count's vectors, looks for an eigenvalue in the window or below it;
-    one it finds joins the count's start, and the count's vectors join the
-    start of every per-root count and of every step of the index solve.
+    below ω_c than the count admits. With ω_c at or above min_K D_K the count runs
+    at the highest root found below min_K D_K and checks the branches up to it; a
+    result reaching min_K D_K warns that the roots from there up are not checked.
+    Roots solved past the cut are dropped. The Davidson solves of the count start from
+    the roots found, one random vector and M's lowest diagonal entries; where those are
+    exact eigenvectors of A_eff the solve converges at once and can hide a branch, so at
+    the first cut, the highest, a second Davidson, from the random vector alone and off
+    the span of the count's vectors, looks for an eigenvalue in the window or below it;
+    one it finds joins the count's start, and the count's vectors join the start of
+    every per-root count and of every step of the index solve.
 
     Limits: the vectors of two distinct roots split by δ are determined to about
     tol_residual/δ on the Davidson branch, and to the ω error times |dA/dω|/δ on
@@ -695,7 +693,6 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
                       f'than nroots={nroots}; returning {n}', RuntimeWarning,
                       stacklevel=2)
         nroots = n
-    nfollow = min(nroots + 2, n)
     label = f'ee-ADC fold ({spin or "both"})'
     e0, X0, runs = _seed_levels(m0, diag_s, n, nroots, dense, tol_residual, label)
     # per root, appended as levels are solved; copy marks a duplicate's copy
@@ -705,7 +702,7 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
     nlev = 0
 
     def solve_root(om, y, lv, k0=0):
-        step = _root_step(pieces, spin, y, nfollow, dense, tol_residual, label)
+        step = _root_step(pieces, spin, y, dense, tol_residual, label)
         lam, t1, yk, k, mode, conv, err = _iterate(
             step, om, label=f'{label} root {len(omega)}', **kw)
         if not conv:
@@ -840,12 +837,15 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         t1f = np.array([t1_out[r] for r in L])
         cut = float(found[min(nroots, found.size) - 1])
         deficit = max(nroots - found.size, 0)
+        upto = nroots
         if cut >= d_min:
-            short = f'; {deficit} root(s) short of nroots' if deficit else ''
-            warnings.warn(f'{label}: omega = {cut:.8f} Ha lies at or above the lowest '
-                          f'doubles energy {d_min:.8f} Ha; the count of roots below '
-                          f'it is not checked{short}', RuntimeWarning, stacklevel=2)
-            break
+            # the branch order holds below min_K D_K only: count at the highest
+            # root found below it, which checks the branches up to that root
+            below = found[found < d_min]
+            if below.size == 0:
+                break
+            cut, deficit = float(below[-1]), 0
+            upto = None
         # λ_j(ω_c) - ω_c ≈ (ω_j - ω_c) / T1_j: a branch whose root lies within
         # tol T1_j of ω_c falls in the window; count the found roots the same way
         nf_lo = int(np.count_nonzero(found < cut - tol * t1f))
@@ -883,7 +883,8 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
             else:
                 covered.update(range(c, c + b - a))
             a = b
-        missing = [j for j in range(nroots) if j not in covered]
+        missing = [j for j in range(nb if upto is None else upto)
+                   if j not in covered]
         if rnd == _COUNT_ROUNDS or not missing:
             warnings.warn(f'{label}: {len(missing) or nb_lo - nf_lo + deficit} of the '
                           f'{nroots} lowest roots not found after {rnd} round(s)',
@@ -893,10 +894,7 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         # a group takes its degenerate partners past nroots too: a level whole
         groups = []
         for j in missing:
-            if groups and j == groups[-1][1] and \
-                    lam[j] - lam[groups[-1][0]] <= _DEGENERATE:
-                groups[-1][1] = j + 1
-            elif not groups or j >= groups[-1][1]:
+            if not groups or j >= groups[-1][1]:
                 groups.append([j, j + 1])
             while groups[-1][1] < lam.size and groups[-1][1] not in covered and \
                     lam[groups[-1][1]] - lam[groups[-1][0]] <= _DEGENERATE:
@@ -907,12 +905,19 @@ def solve_folded(pieces, nroots, spin=None, tol_omega=1e-6, tol_residual=1e-6,
         mark_copies()
         if len(live()) == before:
             warnings.warn(f'{label}: the branches {missing} solved by index landed on '
-                          'roots already found; stopped', RuntimeWarning, stacklevel=2)
+                          'roots already found; stopped, their roots missing from the '
+                          'result', RuntimeWarning, stacklevel=2)
             break
     # the nroots lowest roots, copies left out, a level cut by nroots whole;
     # roots solved past the cut are dropped
     L = live()
     top = omega[L[min(nroots, len(L)) - 1]]
+    if top >= d_min:
+        short = (f'; {nroots - len(L)} root(s) short of nroots' if len(L) < nroots
+                 else '')
+        warnings.warn(f'{label}: omega = {top:.8f} Ha lies at or above the lowest '
+                      f'doubles energy {d_min:.8f} Ha; the roots from there up are '
+                      f'not checked by the count{short}', RuntimeWarning, stacklevel=2)
     sel = np.asarray([r for r in L if omega[r] <= top], int)
     return FoldResult(np.asarray(omega)[sel], np.column_stack(y_out)[:, sel],
                       np.asarray(t1_out)[sel], np.asarray(steps, int)[sel],

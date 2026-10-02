@@ -72,6 +72,14 @@ root's own w. Checks, on water / cc-pVDZ (RHF, DF factors) unless stated:
       between two found roots is solved on the Davidson branch from a start of
       exact eigenvectors (n 4) and from one symmetry block of two (n 200), without
       a warning.
+  21. a root found past min D, the lowest doubles energy, as the nroots-th: the
+      count runs at the highest root found below min D, so a state folded between
+      the seeds is solved on both branches, without a warning.
+  22. the Davidson start keeps every independent vector offered (n 4: two found
+      roots, the random vector, four diagonal seeds), orthonormal, the found ones
+      first.
+  23. an unknown level and an unknown spin raise ValueError; a fixed-point loop
+      out of steps warns, and the count solves its root again by index.
 
 Run: python tests/test_ee_adc_fold.py
 """
@@ -1129,10 +1137,12 @@ def check_warning_paths(eps, B, no):
     # split 5.9e-9 Ha, below the default tol_omega: one root at that resolution
     Pp, w = pair(1e-8)
     res, msgs = run(Pp, 2)
-    ok &= check(any('landed on roots already found' in x for x in msgs)
+    ok &= check(any('landed on roots already found' in x
+                    and 'missing from the result' in x for x in msgs)
                 and res.omega.size == 1 and abs(res.omega[0] - w[0]) < 2e-6,
                 'a pair closer than tol_omega: the branch solved by index lands on '
-                'the found root, which the count reports', f'nout {res.omega.size}')
+                'the found root, and the count says its root is missing',
+                f'nout {res.omega.size}')
     Pp, w = pair(1.2e-6)
     keep = ee_fold._COUNT_ROUNDS
     ee_fold._COUNT_ROUNDS = 0
@@ -1238,6 +1248,63 @@ def check_index_start():
     return ok
 
 
+def check_cut_above_doubles():
+    """M = diag(0.5, 0.6, 0.9, 1.0), the last state folded through a double at 0.8
+    to 0.55: at nroots 3 the third root found (0.9) lies past min D, where the
+    count does not hold; it runs at 0.6 instead and finds 0.55."""
+    ok = True
+    om = 0.55
+    C = np.array([[0.0, 0.0, 0.0, np.sqrt((1.0 - om) * (0.8 - om))]])
+    for dl in (2000, 0):
+        got, d, msgs = _fold_run(np.array([0.5, 0.6, 0.9, 1.0]), C, np.array([0.8]),
+                                 3, dense_limit=dl)
+        ok &= check(d < 1e-8 and not msgs,
+                    f'dense_limit {dl}: nroots 3 past min D returns 0.5, 0.55, 0.6',
+                    f'got {np.round(got, 9).tolist()}, {len(msgs)} warning(s)')
+    return ok
+
+
+def check_guess_start():
+    """_guess(cols, diag, width) keeps every independent column it is offered:
+    n 4, cols e0 and e1, whose diagonal seeds repeat them."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    cols = np.eye(4)[:, :2]
+    Q = ee_fold._guess(cols, np.array([0.5, 0.6, 0.9, 1.0]), 8)
+    orth = Q.shape[1] == 4 and np.allclose(Q.T @ Q, np.eye(4), atol=1e-12)
+    first = np.allclose(np.abs(Q[:, :2].T @ cols), np.eye(2), atol=1e-12)
+    return check(orth and first, 'the start spans the space, the found vectors first',
+                 f'{Q.shape[1]} of 4 columns')
+
+
+def check_refusals():
+    """A level outside FOLD_LEVELS and a spin outside singlet/triplet/None raise
+    ValueError; a fixed-point loop (t_min above every T1) out of steps warns, and the
+    count, which finds that root's branch uncovered, solves it again by index."""
+    from src.SingleReference.ADC.eeADC import ee_fold
+    ok = True
+    m, C, D = np.array([0.5, 0.6]), np.array([[0.4, 0.0]]), np.array([0.9])
+    for tag, P, spin in (('level adc3', dict(_synthetic_pieces(m, C, D),
+                                             level='adc3'), 'singlet'),
+                         ('spin quintet', _synthetic_pieces(m, C, D), 'quintet')):
+        try:
+            ee_fold.solve_folded(P, 1, spin=spin)
+            raised = False
+        except ValueError:
+            raised = True
+        ok &= check(raised, f'{tag}: ValueError')
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        res = ee_fold.solve_folded(_synthetic_pieces(m, C, D), 1, spin='singlet',
+                                   t_min=0.999, max_newton=1, max_fixed=1)
+    msgs = [str(x.message) for x in caught]
+    d = abs(res.omega[0] - np.sort(_synthetic_exact(m, C, D)[0])[0])
+    ok &= check(any('(fixed)' in x for x in msgs) and res.loop == ['index']
+                and bool(res.converged[0]) and d < 2e-6,
+                'the fixed-point loop out of steps warns; the count solves the root '
+                'by index', f'loop {res.loop}, |dw| {d:.1e} Ha')
+    return ok
+
+
 def main():
     """Run every check; print ALL PASSED or FAILURES DETECTED; exit 0 or 1."""
     all_ok = True
@@ -1268,6 +1335,9 @@ def main():
     all_ok &= check_warning_paths(eps, B, no)
     all_ok &= check_window_branch()
     all_ok &= check_index_start()
+    all_ok &= check_cut_above_doubles()
+    all_ok &= check_guess_start()
+    all_ok &= check_refusals()
     print('\nALL PASSED' if all_ok else '\nFAILURES DETECTED')
     return 0 if all_ok else 1
 
